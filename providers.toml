@@ -67,3 +67,12 @@ version = "3.12"
 # (V91). `npm install -g` of this spec, then tools/patch-scip-python.js,
 # without which 0.6.6 does not start on Windows (V104).
 npm = "@sourcegraph/scip-python@0.6.6"
+
+[lspmux]
+# Not a provider: the LSP multiplexer the shim (codetags-lsp serve) runs, M3.
+# Upstream, unmodified (D14), built from this git revision (D19): the crates.io
+# release 0.3.0 predates fixes the proxy needs (V35). `just setup-lspmux`
+# installs it into .codetags/local. codetags_lsp::lspmux::PINNED_REV must equal
+# `rev` (a unit test there checks this).
+git = "https://codeberg.org/p2502/lspmux"
+rev = "18861f9d59e74ece8d867772cf07fa302c2dae98"

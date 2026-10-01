@@ -47,6 +47,18 @@ setup-providers:
     @want="$(sed -n '/^\[scip-python\]/,/^\[/s/^npm *= *".*@\(.*\)".*/\1/p' providers.toml)"; got="$(scip-python --version 2>&1)"; if [ "$got" = "$want" ]; then echo "scip-python $got"; else echo "setup-providers: providers.toml pins scip-python $want; found: $got"; exit 1; fi
     @echo "setup-providers: ready"
 
+# The pinned lspmux (PLAN.md D19; providers.toml [lspmux]) that the LSP shim
+# runs (M3), built from source into .codetags/local/bin, where codetags-lsp,
+# the wrappers and the tests find it. Idempotent: no build, and no network,
+# when .codetags/local/.crates.toml already records the pinned revision.
+# Kept out of `setup`: it builds for about a minute and fetches from
+# codeberg.org, which only the jobs that test the proxy (`@lspmux`) need.
+setup-lspmux:
+    @rev="$(sed -n '/^\[lspmux\]/,/^\[/s/^rev *= *"\(.*\)".*/\1/p' providers.toml)"; git="$(sed -n '/^\[lspmux\]/,/^\[/s/^git *= *"\(.*\)".*/\1/p' providers.toml)"; \
+    if grep -q "#$rev" .codetags/local/.crates.toml 2>/dev/null && [ -x .codetags/local/bin/lspmux ]; then echo "setup-lspmux: lspmux $rev is already installed"; \
+    else cargo install --locked --git "$git" --rev "$rev" --root .codetags/local lspmux; fi
+    .codetags/local/bin/lspmux --version
+
 # --- the green light -----------------------------------------------------
 
 # Universal check: must exit 0 on Linux, macOS, and Windows (PLAN.md §0.6).
