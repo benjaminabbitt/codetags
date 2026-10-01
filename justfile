@@ -27,7 +27,7 @@ setup-providers:
 # --- the green light -----------------------------------------------------
 
 # Universal check: must exit 0 on Linux, macOS, and Windows (PLAN.md §0.6).
-check: override-check fmt-check lint license-check test bdd tags-check
+check: override-check fmt-check lint duckdb-verify license-check test bdd tags-check
     @echo "check: green"
 
 # Fails while .cargo/config.toml holds a local override (`just dev-tagma PATH`
@@ -43,6 +43,13 @@ fmt-check:
 
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
+
+# Checks the prebuilt libduckdb archive that the build downloaded (V29) against
+# its pinned SHA-256 in duckdb.sha256 (PLAN.md R8). Runs after `lint` has built
+# libduckdb-sys and before `test` loads the library. With TARGET, checks the
+# cache of a `--target TARGET` build.
+duckdb-verify TARGET="":
+    sh ci/duckdb-verify.sh {{TARGET}}
 
 # Licence boundaries (PLAN.md §0.12, D9); policy in deny.toml.
 license-check:

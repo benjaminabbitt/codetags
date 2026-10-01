@@ -426,7 +426,7 @@ codetags/
 |---|---|---|
 | Rust | `rust-toolchain.toml` 1.96.x, edition 2024 | 1.96.1 on the dev host |
 | tagma-core | git `benjaminabbitt/tagma` at the full SHA of `b1ae808`, the first BSD-3-Clause commit | Local override: `just dev-tagma PATH` adds a marked `[patch]` block to the committed `.cargo/config.toml`, and `just dev-tagma` removes it. `just override-check`, part of `check`, fails while it is present. |
-| duckdb | `~1.10506` (DuckDB 1.5.6), default features (V29) | **Development and CI** link the prebuilt dynamic library (R1, V29):<br>• The committed `.cargo/config.toml` sets `DUCKDB_DOWNLOAD_LIB=1`, so `just`, plain cargo and rust-analyzer all use it.<br>• libduckdb-sys downloads the release library into `target/duckdb-download/` and copies it into `target/<profile>/deps`. Cargo puts that directory on the runtime library path for tests and `cargo run`.<br>• A binary that links DuckDB, run outside cargo, does not find the library: there is no rpath.<br>**Release builds** enable `codetags-model`'s `bundled-duckdb` feature (`duckdb/bundled`). It is a static build, so there is no runtime DLL, but it compiles DuckDB's C++ for about 12 minutes. On Windows it needs a short `CARGO_TARGET_DIR` and `+crt-static` (V8). |
+| duckdb | `~1.10506` (DuckDB 1.5.6), default features (V29) | **Development and CI** link the prebuilt dynamic library (R1, V29):<br>• The committed `.cargo/config.toml` sets `DUCKDB_DOWNLOAD_LIB=1`, so `just`, plain cargo and rust-analyzer all use it.<br>• libduckdb-sys downloads the release library into `target/duckdb-download/`, where `just duckdb-verify` checks the archive against `duckdb.sha256` (R8), and copies it into `target/<profile>/deps`. Cargo puts that directory on the runtime library path for tests and `cargo run`.<br>• A binary that links DuckDB, run outside cargo, does not find the library: there is no rpath.<br>**Release builds** enable `codetags-model`'s `bundled-duckdb` feature (`duckdb/bundled`). It is a static build, so there is no runtime DLL, but it compiles DuckDB's C++ for about 12 minutes. On Windows it needs a short `CARGO_TARGET_DIR` and `+crt-static` (V8). |
 | cucumber | 0.23 | Latest as of 2026-09-30; tagma pins 0.21.1 |
 | fuser | 0.18 | V11 |
 | `nfsserve` or `nfs3_server` | chosen in spike S2 | V13 |
@@ -664,14 +664,14 @@ This no longer gates anything (D2).
 
 | ID | Risk | Mitigation |
 |---|---|---|
-| R1 | The bundled DuckDB build is slow, especially on Windows CI. | Development and CI never compile DuckDB. They link the prebuilt library through `DUCKDB_DOWNLOAD_LIB` (§4, V29), so a cold `just check` takes about 1.5 minutes on the dev host, with no C++ compile. Only release builds enable `bundled-duckdb`. CI runs `cargo clean -p libduckdb-sys` after restoring its cache, because rust-cache prunes the downloaded library (V29). Residual risks: the download needs network on a cold `target/`, and it is not checksummed (R8). |
+| R1 | The bundled DuckDB build is slow, especially on Windows CI. | Development and CI never compile DuckDB. They link the prebuilt library through `DUCKDB_DOWNLOAD_LIB` (§4, V29), so a cold `just check` takes about 1.5 minutes on the dev host, with no C++ compile. Only release builds enable `bundled-duckdb`. CI runs `cargo clean -p libduckdb-sys` after restoring its cache, because rust-cache prunes the downloaded library (V29). Residual risks: the download needs network on a cold `target/`, and libduckdb-sys itself checks no checksum; `just check` verifies the archive afterwards (R8). |
 | R2 | A provider does not run on some OS (e.g. scip-go, scip-python or Jelly on Windows). | V20; a per-OS exception approved by the human. |
 | R3 | tagma is in-memory with String keys, so it may not scale in memory or rebuild time. | O-3. Alternative: compile postfix queries to SQL over a DuckDB tag table, validated by tagma's own conformance features. |
 | R4 | The macOS NFS client caches despite `actimeo=0`, e.g. negative-name caching. | Spike S2 measures it. |
 | R5 | Proving "unprivileged" on Windows runners, which run as admin. | V18. |
 | R6 | Runner images drift; the `fusermount3` shadow is an example. | `codetags doctor` plus pinned runner labels. |
 | R7 | Deep query paths hit Windows' 260-character MAX_PATH and case-insensitive name handling on Windows and macOS. | Collision suffixes; tests at the limits; the `codetags q` CLI as the fallback |
-| R8 | libduckdb-sys downloads the prebuilt DuckDB archive over HTTPS without checking a checksum (V29), so a tampered or replaced release asset would be linked into development and CI builds. | A later task pins the archive's hash for each target and checks it before the library is used. |
+| R8 | libduckdb-sys downloads the prebuilt DuckDB archive over HTTPS without checking a checksum (V29), so a tampered or replaced release asset would be linked into development and CI builds. | `duckdb.sha256` pins the SHA-256 of each target's archive, taken from the GitHub release's asset digests (V68). `just duckdb-verify` hashes the cached archive for the current target and fails on a mismatch or a missing pin (V69). `just check` runs it after `lint`, which runs the build script, and before `test` and `bdd` load the library. Residual risks: the build script has already linked the library when the check runs, so a bad archive fails the check rather than the build; and the pins trust the asset GitHub held when they were taken. |
 
 ---
 
@@ -681,7 +681,8 @@ This no longer gates anything (D2).
 |---|---|
 | `setup` | Rust toolchain components; per-OS notes |
 | `setup-providers` | Installs the pinned providers from `providers.toml` |
-| `check` | `override-check`, `fmt-check`, `lint`, `license-check`, `test`, `bdd`, `tags-check` |
+| `check` | `override-check`, `fmt-check`, `lint`, `duckdb-verify`, `license-check`, `test`, `bdd`, `tags-check` |
+| `duckdb-verify [TARGET]` | Checks the cached prebuilt libduckdb archive for the host (or TARGET) against its pin in `duckdb.sha256` (R8) |
 | `override-check` | Fails while `.cargo/config.toml` holds a local override (a `dev-tagma` block or any `[patch]`) |
 | `license-check` | `cargo deny check licenses bans` (rule 12) |
 | `fmt` / `fmt-check` / `lint` / `test` | cargo equivalents; clippy with `-D warnings` |

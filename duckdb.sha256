@@ -1,0 +1,22 @@
+# Pinned SHA-256 of the prebuilt libduckdb archives that libduckdb-sys
+# downloads when DUCKDB_DOWNLOAD_LIB is set (PLAN.md §4, R1, R8; V29, V68).
+# `just duckdb-verify` hashes the cached archive for the current target and
+# fails unless it matches the line for its DuckDB version and archive name.
+#
+# Format: <duckdb version> <archive name> <sha256>
+#
+# To update, after bumping the duckdb crate (DuckDB X.Y.Z is crate ~1.XYYZZ):
+#   1. Take the digests from the release itself, not from a local download:
+#        gh api repos/duckdb/duckdb/releases/tags/vX.Y.Z \
+#          --jq '.assets[] | select(.name|startswith("libduckdb-")) | "\(.digest) \(.name)"'
+#      GitHub computes each asset's `digest` when it is uploaded.
+#   2. Add one line per archive below, for the five archive names that
+#      libduckdb-sys's build.rs (`LibduckdbArchive::for_target`) downloads,
+#      and remove the old version's lines.
+#   3. Record the source and date in docs/verification.md.
+
+1.5.6 libduckdb-linux-amd64.zip b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b
+1.5.6 libduckdb-linux-arm64.zip b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee
+1.5.6 libduckdb-osx-universal.zip e0bc007d9b0094c0970ac1847a8601d10aad07cbd2910ce586ec810f77b638d6
+1.5.6 libduckdb-windows-amd64.zip 44cf59583f9951d2cb09b1bf115a63ecb2d8901e363903029d86c7d8683fe96a
+1.5.6 libduckdb-windows-arm64.zip c63285647e94c46d309b60d5dd1ff3cb2cdf9ca03e415a818ff7d8dbf838e0e8
