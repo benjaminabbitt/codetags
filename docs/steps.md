@@ -16,6 +16,22 @@ Then it exits with status {int}
 Then stdout matches {string}            # Rust `regex` syntax, unanchored unless the pattern anchors itself
 ```
 
+## DuckDB model layer
+
+"Another process" steps re-run the test executable as a child process. That
+proves cross-process behaviour, not just behaviour between connections in one
+process.
+
+```gherkin
+Given a DuckDB database with a table {string} holding the rows {string}
+      # table name: [a-z_]+; rows: whitespace-separated values in one TEXT column `v`;
+      # the writer closes the file before the step ends
+When another process opens it read-only and lists table {string}
+When another process opens it read-only and inserts {string} into table {string}
+Then that process reads exactly {string}         # space-joined `v` values, sorted
+Then that process's write is refused
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

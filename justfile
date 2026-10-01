@@ -44,8 +44,10 @@ test:
 
 # Gherkin features (PLAN.md §0.2) that need no mount, provider, or privilege.
 # Jobs with more capabilities set CODETAGS_BDD_CAPABILITIES (codetags-bdd).
+# Every cargo invocation here selects --workspace: a narrower selection unifies
+# features differently and recompiles the bundled DuckDB (10+ minutes).
 bdd:
-    cargo test -p codetags --test bdd
+    cargo test --workspace --test bdd
 
 # Validates this repo's .codetags/tags (P6.2). Vacuously green while no tags
 # file exists; fails once one exists until the validator is built.
