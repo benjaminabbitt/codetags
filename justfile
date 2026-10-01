@@ -133,11 +133,13 @@ test-mount:
     if [ "{{ os() }}" = windows ]; then cargo test --workspace --test name_probe -- --ignored --nocapture; fi
 
 # Index features against the fixtures (P1): the bdd suite with the
-# `providers` capability enabled. Run `setup-providers` first. Builds every
+# `providers` capability enabled, plus any the caller's
+# CODETAGS_BDD_CAPABILITIES lists (CI adds `lspmux`, after `setup-lspmux`,
+# for features/lsp/wiring.feature). Run `setup-providers` first. Builds every
 # workspace binary first, as `bdd` does.
 test-providers:
     cargo build --workspace --bins --quiet
-    CODETAGS_BDD_CAPABILITIES=providers cargo test --workspace --test bdd
+    CODETAGS_BDD_CAPABILITIES="providers${CODETAGS_BDD_CAPABILITIES:+,$CODETAGS_BDD_CAPABILITIES}" cargo test --workspace --test bdd
 
 # The provider fixtures whose edge counts are baselined in tests/baselines:
 # those `codetags index` ingests. Add go, ts and python once ingest supports
