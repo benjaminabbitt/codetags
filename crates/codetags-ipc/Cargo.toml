@@ -1,0 +1,14 @@
+[package]
+name = "codetags-ipc"
+description = "Local-socket transport with peer checks: Unix sockets and Windows named pipes (PLAN.md C1, §2.8)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

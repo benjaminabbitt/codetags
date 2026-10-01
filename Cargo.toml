@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "BSD-3-Clause"
+repository = "https://github.com/benjaminabbitt/codetags"
+publish = false
+
+[workspace.dependencies]
+# Internal crates.
+codetags-model = { path = "crates/codetags-model" }
+codetags-names = { path = "crates/codetags-names" }
+codetags-ingest = { path = "crates/codetags-ingest" }
+codetags-tags = { path = "crates/codetags-tags" }
+codetags-views = { path = "crates/codetags-views" }
+codetags-plugins = { path = "crates/codetags-plugins" }
+codetags-materialize = { path = "crates/codetags-materialize" }
+codetags-mount-fuse = { path = "crates/codetags-mount-fuse" }
+codetags-mount-nfs = { path = "crates/codetags-mount-nfs" }
+codetags-mount-winfsp = { path = "crates/codetags-mount-winfsp" }
+codetags-watch = { path = "crates/codetags-watch" }
+codetags-ipc = { path = "crates/codetags-ipc" }
+codetags-bdd = { path = "crates/codetags-bdd" }
+
+# External crates. Pins and rationale: PLAN.md §4.
+# tagma is pinned by full SHA; `just dev-tagma PATH` overrides it locally.
+tagma-core = { git = "https://github.com/benjaminabbitt/tagma", rev = "9a2b04465c573ca70842cc83227ec4d732715c75" }
+duckdb = { version = "~1.10506", features = ["bundled"] }
+cucumber = "0.23"
+futures = "0.3"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
