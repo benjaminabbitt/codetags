@@ -34,7 +34,7 @@ of tagma's `PLAN.md`:
 8. **Verification:** verify every ⚠ before code depends on it (brief §6.4).
 9. **Performance:** no optimization without a benchmark that fails its target first.
 10. **Safety:**
-    - The only TCP listener in the whole system is the macOS NFS loopback backend (§2.8). It binds loopback only.
+    - TCP listeners bind loopback only: the macOS NFS loopback backend (§2.8), and upstream lspmux's default (D14).
     - Never run a language server or indexer as root or admin.
     - The privileged helper never executes project code.
 11. **No silent skips.** Every scenario must run in at least one CI job, or be listed in `ci/expected-skips.txt`; this is enforced across jobs:
@@ -69,16 +69,13 @@ of tagma's `PLAN.md`:
 | D11 | **View and edit by tags, BATFS-style** (§2.10). **DRAFT, for review.** Query directories show the real source files; reads and writes go to those files, and filesystem operations in query directories add and remove tags. | Reverses brief §1's non-goal "editing code through views" for source files reached through tags. Derived views (`.skel`, cards, diagrams) stay read-only. Supersedes the O-6 and O-7 defaults. |
 | D12 | **Recursion guard** (§2.11). **DRAFT, for review.** Every mutating operation goes through one serialized queue, deletes are buffered, and a decaying counter detects recursive operations and holds them. | none |
 | D13 | **Change notifier** (§2.12). **DRAFT, for review.** Watcher events become tagged items. Per-consumer filters, written as tagma postfix queries over file name, extension, metadata and tags, decide what each language server is sent. | brief §4.3 "Routing" |
+| D14 | **Zero changes to lspmux, if at all possible** (2026-10-01). Use upstream lspmux unmodified, as an installed and pinned tool rather than a vendored fork, and build our pieces around it: shim, watcher and config. Its transport stays as upstream has it: loopback TCP by default, which is fine. A requirement lspmux can't meet unmodified becomes an upstream PR or an accepted gap, never a local patch. P3 is being re-planned from an analysis (`docs/proxy-zero-change.md`). | Overrides brief §2 "Proxy base: fork or extend lspmux" and "local transport only: Unix socket", C1, and D9's lspx carve-out (no EUPL code in this repo). Brief §2's "never listen on a non-loopback TCP port" still holds, through upstream's default config. |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
-The planning agent derived these from D1–D13 and from research. Each is a default the human may overturn.
+The planning agent derived these from D1–D14 and from research. Each is a default the human may overturn.
 
-- **C1. Transport.**
-  - Linux and macOS: a Unix socket.
-  - Windows: a named pipe restricted to the current user, via `interprocess` local sockets.
-  - lspmux's TCP listener is deleted, not just defaulted off (V1, §2.8).
-  - Cross-machine SSH forwarding is supported only between Unix hosts until it has been tested with Win32-OpenSSH (V16).
+- **C1. Transport.** *Superseded by D14:* upstream lspmux's transport, loopback TCP by default. Cross-machine use goes through SSH TCP port forwarding (`ssh -L`), which works between any of the three OSes.
 - **C2. Watcher.**
   - The unprivileged baseline everywhere is `notify` (inotify / FSEvents / ReadDirectoryChangesW).
   - Privileged accelerators run through the optional helper: fanotify on Linux, the USN change journal on Windows.
@@ -219,7 +216,7 @@ optional, admin-installed: codetags-privhelper (fanotify | USN journal) ─> eve
 | Staleness control | `fuser` `Notifier` inval + short TTLs | no server push: `actimeo=0`, directory mtime bump per generation | WinFsp notify ⚠ |
 | Watcher (unprivileged) | inotify | FSEvents | ReadDirectoryChangesW |
 | Privileged accelerator | fanotify | none needed | USN change journal |
-| Proxy transport | Unix socket | Unix socket | named pipe |
+| Proxy transport | loopback TCP (upstream lspmux, D14) | loopback TCP | loopback TCP |
 | CI | ubuntu | macos (arm64) | windows, with and without WinFsp |
 
 Why the other candidates are not v1 backends:
@@ -251,10 +248,8 @@ Why the other candidates are not v1 backends:
 
 ### 2.8 Security
 
-- **lspx has no TCP.**
-  - Unix: the socket lives in a per-user directory (mode 0700), the socket itself is 0600, and the peer UID is checked.
-  - Windows: the named pipe's DACL grants only the current user's SID, and it sets `PIPE_REJECT_REMOTE_CLIENTS`.
-- **The macOS NFS loopback is the only TCP listener.**
+- **Proxy transport (D14):** upstream lspmux, loopback TCP by default. Other local users can reach a loopback port, and language servers execute project code (brief §2), so on shared machines this is accepted exposure (O-20).
+- **The macOS NFS loopback** also listens on TCP.
   - It binds 127.0.0.1 on an ephemeral port, with an unguessable export path.
   - The only operations allowed are reads and tag creation.
   - **Residual risk:** another local user who learns the port and token can read the views, because NFSv3 AUTH_SYS is spoofable. **[OPEN] O-5.** Default: accept, with these mitigations documented.
@@ -548,8 +543,8 @@ This no longer gates anything (D2).
 
 | ID | Tag | Task |
 |---|---|---|
-| P3.0 | MECH | Import lspmux at a pinned rev into `crates/lspx` with git subtree, keeping its history and EUPL-1.2 LICENSE (O-9). |
-| P3.1 | CORE | Transport: delete the TCP listener; add local sockets with peer checks (C1, §2.8). |
+| P3.0 | SPEC | **Re-planned by D14.** Analyse a zero-change integration of upstream lspmux, classifying each brief §4.1–§4.3 requirement as done upstream, achievable outside lspmux, or needing an upstream PR, in `docs/proxy-zero-change.md`. P3.1–P3.8 are rewritten from it after human review. |
+| P3.1 | MECH | Transport: no change (D14). Verify that upstream's default listen address is loopback, and record it. |
 | P3.2 | CORE | Routing key per the brief. Replace `pass_environment = ["*"]` with a curated allowlist (V2). Replace device+inode equality with spelled-path identity, warning on aliases (V3). |
 | P3.3 | CORE | Fixed-capability handshake. A multi-root handshake returns an LSP error and never panics (V4). |
 | P3.4 | CORE | Server-to-client requests per the brief's table. Every request gets a response (V5). |
@@ -649,7 +644,7 @@ This no longer gates anything (D2).
 | O-8 | Targets: tag write → visible; source edit → view fresh; a cap on result listings. | 250 ms p95 on 1M items (proposed); measure freshness first; no cap |
 | O-9 | Import lspmux by subtree, or keep a separate fork repo. | subtree |
 | O-10 | macFUSE or FUSE-T as optional macOS backends when already installed. | not in v1 |
-| O-11 | Cross-machine proxy with a Windows endpoint. | unsupported until tested |
+| O-11 | Cross-machine proxy with a Windows endpoint. | resolved by D14: SSH TCP port forwarding |
 | O-12 | User tags on symbols, not just files. | files only in v1; the id scheme already allows symbols |
 | O-13 | Incremental edges from the proxy's warm servers (`source=lsp@ver`) between SCIP runs. | not in v1 |
 | O-14 | Plugins that execute code: WASM (sandboxed, cross-platform, any language) or external processes (simplest, but a repo-supplied command is code run on clone, so it needs a trust step like `direnv allow`). | not in v1; built-in and declarative only |
@@ -658,6 +653,7 @@ This no longer gates anything (D2).
 | O-17 | Recursion-guard parameters: half-life, threshold, grace window, quiet level; and what a tripped actor sees. | 1 s, 20, 2 s, *T*/4; EPERM plus `@pending` and `codetags ops pending` |
 | O-18 | Whether mass content writes (e.g. `sed -i` over a query directory) are held like deletes. | counted and journaled, never held |
 | O-19 | D11–D13 are drafts: confirm the operation mapping, the guard, and the notifier before their [SPEC] features are written. | none; the human reviews |
+| O-20 | Loopback TCP can be reached by other local users on shared machines. A shared-secret handshake would close that, but would need an lspmux change. | accepted (D14) |
 
 ## 17. Risks
 
