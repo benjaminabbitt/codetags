@@ -155,10 +155,18 @@ notification methods.
 Use this to record an **interactive** session, which the automated test
 cannot do.
 
+Since M3 stages 1 and 2 (`docs/lsp-shim.md`), `.claude/settings.json`
+enables the `codetags-lsp` plugin (the shim) instead, and the recorder plugin
+is off. To record, turn it on and the shim plugin off for yourself, in
+`.claude/settings.local.json` (`"codetags-lsp-recorder@codetags-local":
+true`, `"codetags-lsp@codetags-local": false`), or through `/plugin`. The
+shim can also log a session itself: set `CODETAGS_LSP_LOG_DIR` (see
+`tools/lsp/rust-analyzer-shim.sh`).
+
 ### A.1 What is in the repo
 
-- `tools/claude-plugins/`: a local marketplace, `codetags-local`, with one
-  plugin, `codetags-lsp-recorder`. Its `lspServers.rust-analyzer` runs
+- `tools/claude-plugins/`: a local marketplace, `codetags-local`, with the
+  plugin `codetags-lsp-recorder` (and, since stage 1, `codetags-lsp`). Its `lspServers.rust-analyzer` runs
   `tools/claude-plugins/codetags-lsp-recorder/scripts/rust-analyzer-recorder`
   for `.rs` files, with `workspaceFolder` = `${CLAUDE_PROJECT_DIR}`. Claude
   Code loads it in place from the main checkout (V108).

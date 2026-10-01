@@ -414,7 +414,7 @@ codetags/
     codetags-privhelper/    optional privileged helper (bin)
     codetags/               CLI and codetagsd (bin)
     codetags-bdd/           cucumber runner and step definitions (test-only)
-    codetags-lsp/           LSP session recorder and analyzer (M3 stage 0), later the shim (P3.4); no DuckDB (bin)
+    codetags-lsp/           LSP shim between clients and upstream lspmux (M3), plus the stage-0 recorder and analyzer; no DuckDB (bin)
     lspx/                   lspmux fork, EUPL-1.2 with its own LICENSE (bin), P3.0. Nothing else depends on it (D9)
   plugins/mermaid/          first declarative plugin (plugin.toml, *.sql, *.j2), shipped as a default
   tools/claude-plugins/     local Claude Code marketplace, enabled in .claude/settings.json (D18)
@@ -714,6 +714,8 @@ This no longer gates anything (D2).
 | `doctor` | Environment report: mount backend, helper, providers |
 | `dogfood` | Index this repo and refresh its views (M1) |
 | `lsp-record-setup` | M3 stage 0 (D18): installs `codetags-lsp` as the recorder this repo's Claude Code plugin runs rust-analyzer through, and prints the runbook steps (`docs/lsp-stage0.md`) |
+| `setup-lspmux` | M3 (D19): installs lspmux at the pinned revision (`providers.toml` `[lspmux]`) into `.codetags/local`; idempotent. Not part of `setup`: only the jobs that run `@lspmux` scenarios need it |
+| `lsp-setup` | M3 stages 1 and 2 (D14-D22): wires this repo's Claude Code plugin and VS Code to the shim (`.codetags/local`; on Windows, wrapper executables), then runs `codetags lsp setup`, which asks first (`docs/lsp-shim.md`) |
 | `dev-tagma PATH` | Local tagma override (a marked block in `.cargo/config.toml`; no PATH removes it) |
 
 ## Appendix B — view tree and tag-write rules
