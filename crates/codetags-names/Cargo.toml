@@ -1,6 +1,6 @@
 [package]
 name = "codetags-names"
-description = "Canonical symbol names, the path profile, and collision suffixes (PLAN.md §2.7)."
+description = "Canonical symbol names, the Windows private-use mapping, item ids, and collision suffixes (PLAN.md §2.7, D15)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ publish.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+tagma-core.workspace = true
 
 [lints]
 workspace = true

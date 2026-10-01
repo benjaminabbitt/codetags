@@ -1,24 +1,22 @@
-//! Item ids for the tags file (PLAN.md §2.3, §2.4).
+//! Item ids for the tags file (PLAN.md §2.3, §2.4, D15).
 //!
 //! An id is `file:<project-relative POSIX path>` or `sym:<canonical name>`.
-//! The value is percent-encoded so the id never needs quoting: tagma's
-//! `add_line` would keep a quoted id's quotes (V21), and codetags splits
-//! lines with `tagma_core::token::split_unquoted_whitespace`.
+//! It is written bare unless it holds whitespace or `"`; then the whole id
+//! is written as a tagma quoted token (tagma SPEC §2): wrapped in `"`, with
+//! `"` written `\"` and `\` written `\\`.
 //!
-//! Only what would break a line is encoded: `%` itself, `"`, every
-//! Unicode whitespace character, and every control character. `/` stays
-//! raw, so a file id reads like its path (`file:docs/My%20Notes.md`).
-//! This differs from the path profile on purpose: an id is a field in a
-//! text file, not a file name.
+//! ```text
+//! file:src/billing/charge.rs
+//! "file:docs/My Notes.md"
+//! ```
 //!
-//! Decoding accepts any valid `%XX`, upper or lower case; [`ItemId`]'s
-//! `Display` always writes the one canonical spelling, so the tags file
-//! normalizes ids when it rewrites them.
+//! tagma's `add_line` keeps a quoted id's quotes and does not decode them
+//! (V21), so codetags splits a line with
+//! `tagma_core::token::split_unquoted_whitespace` and reads the id with
+//! [`ItemId`]'s `FromStr`. Every id it writes is exactly one such field.
 
 use std::fmt;
 use std::str::FromStr;
-
-use crate::percent::{self, PercentError};
 
 /// The id of a taggable item.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -41,11 +39,11 @@ pub enum ItemIdError {
     UnknownKind,
     /// The value after the prefix is empty.
     Empty,
-    /// It holds a character that must be encoded (whitespace, `"`, a
-    /// control character).
-    Unencoded(char),
-    /// The value's percent-encoding is malformed.
-    Percent(PercentError),
+    /// A bare id holds whitespace or `"`, which only a quoted id may.
+    NeedsQuoting(char),
+    /// A quoted id is malformed: unterminated, a bad `\` escape, or
+    /// text after the closing quote.
+    BadQuoting(String),
 }
 
 impl fmt::Display for ItemIdError {
@@ -56,18 +54,20 @@ impl fmt::Display for ItemIdError {
                 "an item id starts with {FILE_PREFIX:?} or {SYMBOL_PREFIX:?}"
             ),
             ItemIdError::Empty => f.write_str("an item id has a value after its prefix"),
-            ItemIdError::Unencoded(c) => {
-                write!(f, "{c:?} must be percent-encoded in an item id")
-            }
-            ItemIdError::Percent(e) => e.fmt(f),
+            ItemIdError::NeedsQuoting(c) => write!(
+                f,
+                "an item id holding {c:?} must be quoted: \"file:...\", with \\\" and \\\\ escapes"
+            ),
+            ItemIdError::BadQuoting(why) => write!(f, "malformed quoted item id: {why}"),
         }
     }
 }
 
 impl std::error::Error for ItemIdError {}
 
-fn must_encode(c: char) -> bool {
-    c == '%' || c == '"' || c.is_whitespace() || c.is_control()
+/// Returns `true` if an id holding `c` must be quoted.
+fn needs_quoting(c: char) -> bool {
+    c == '"' || c.is_whitespace()
 }
 
 impl ItemId {
@@ -82,40 +82,64 @@ impl ItemId {
 impl fmt::Display for ItemId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (prefix, value) = self.parts();
-        let mut out = String::with_capacity(prefix.len() + value.len());
-        out.push_str(prefix);
-        for c in value.chars() {
-            if must_encode(c) {
-                percent::push_encoded(&mut out, c);
-            } else {
-                out.push(c);
-            }
+        if !value.chars().any(needs_quoting) {
+            return write!(f, "{prefix}{value}");
         }
-        f.write_str(&out)
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        write!(f, "\"{prefix}{escaped}\"")
     }
+}
+
+/// Decodes a whole tagma quoted token: `"`, content with `\"` and `\\`
+/// escapes, `"`, and nothing after.
+fn unquote(s: &str) -> Result<String, ItemIdError> {
+    let bad = |why: &str| Err(ItemIdError::BadQuoting(why.to_string()));
+    let Some(body) = s.strip_prefix('"') else {
+        return bad("no opening quote");
+    };
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(e @ ('"' | '\\')) => out.push(e),
+                Some(_) => return bad("a backslash escapes only '\"' or '\\'"),
+                None => return bad("a dangling backslash"),
+            },
+            '"' => {
+                if chars.next().is_some() {
+                    return bad("text after the closing quote");
+                }
+                return Ok(out);
+            }
+            _ => out.push(c),
+        }
+    }
+    bad("no closing quote")
 }
 
 impl FromStr for ItemId {
     type Err = ItemIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(c) = s.chars().find(|c| *c != '%' && must_encode(*c)) {
-            return Err(ItemIdError::Unencoded(c));
-        }
-        let (make, value): (fn(String) -> ItemId, &str) =
-            if let Some(path) = s.strip_prefix(FILE_PREFIX) {
-                (ItemId::File, path)
-            } else if let Some(name) = s.strip_prefix(SYMBOL_PREFIX) {
-                (ItemId::Symbol, name)
-            } else {
-                return Err(ItemIdError::UnknownKind);
-            };
-        if value.is_empty() {
+        let text = if s.starts_with('"') {
+            unquote(s)?
+        } else if let Some(c) = s.chars().find(|c| needs_quoting(*c)) {
+            return Err(ItemIdError::NeedsQuoting(c));
+        } else {
+            s.to_string()
+        };
+        let id = if let Some(path) = text.strip_prefix(FILE_PREFIX) {
+            ItemId::File(path.to_string())
+        } else if let Some(name) = text.strip_prefix(SYMBOL_PREFIX) {
+            ItemId::Symbol(name.to_string())
+        } else {
+            return Err(ItemIdError::UnknownKind);
+        };
+        if id.parts().1.is_empty() {
             return Err(ItemIdError::Empty);
         }
-        percent::decode(value)
-            .map(make)
-            .map_err(ItemIdError::Percent)
+        Ok(id)
     }
 }
 
@@ -128,9 +152,15 @@ mod tests {
     fn spellings() {
         for (id, text) in [
             (ItemId::File("src/a.rs".into()), "file:src/a.rs"),
-            (ItemId::File("My Notes.md".into()), "file:My%20Notes.md"),
-            (ItemId::File("a\"b%\u{a0}".into()), "file:a%22b%25%C2%A0"),
-            (ItemId::Symbol("a.B.c+1".into()), "sym:a.B.c+1"),
+            (ItemId::File("My Notes.md".into()), "\"file:My Notes.md\""),
+            (ItemId::File("100%.txt".into()), "file:100%.txt"),
+            (ItemId::File("a\\b".into()), "file:a\\b"),
+            (ItemId::File("say \"hi\"".into()), "\"file:say \\\"hi\\\"\""),
+            (ItemId::File("a\\ b".into()), "\"file:a\\\\ b\""),
+            (
+                ItemId::Symbol("a.Charge<T>.c+1".into()),
+                "sym:a.Charge<T>.c+1",
+            ),
         ] {
             assert_eq!(id.to_string(), text);
             assert_eq!(text.parse(), Ok(id));
@@ -141,27 +171,30 @@ mod tests {
     fn rejects() {
         assert_eq!("dir:x".parse::<ItemId>(), Err(ItemIdError::UnknownKind));
         assert_eq!("file:".parse::<ItemId>(), Err(ItemIdError::Empty));
+        assert_eq!("\"sym:\"".parse::<ItemId>(), Err(ItemIdError::Empty));
         assert_eq!(
             "file:a b".parse::<ItemId>(),
-            Err(ItemIdError::Unencoded(' '))
+            Err(ItemIdError::NeedsQuoting(' '))
         );
         assert_eq!(
-            "sym:\"a\"".parse::<ItemId>(),
-            Err(ItemIdError::Unencoded('"'))
+            "file:a\"b".parse::<ItemId>(),
+            Err(ItemIdError::NeedsQuoting('"'))
         );
-        assert!(matches!(
-            "file:50%".parse::<ItemId>(),
-            Err(ItemIdError::Percent(_))
-        ));
+        for bad in ["\"file:a", "\"file:a\"b", "\"file:\\n\"", "\"file:a\\"] {
+            assert!(
+                matches!(bad.parse::<ItemId>(), Err(ItemIdError::BadQuoting(_))),
+                "{bad:?}"
+            );
+        }
     }
 
     proptest! {
         #[test]
-        fn round_trips_and_is_one_unquoted_field(value in "(?s).{1,30}", file in any::<bool>()) {
+        fn round_trips_as_one_tagma_field(value in "(?s).{1,30}", file in any::<bool>()) {
             let id = if file { ItemId::File(value) } else { ItemId::Symbol(value) };
             let text = id.to_string();
-            prop_assert!(!text.contains('"'));
-            prop_assert!(!text.chars().any(char::is_whitespace));
+            let fields = tagma_core::token::split_unquoted_whitespace(&text);
+            prop_assert_eq!(fields, Ok(vec![text.as_str()]));
             prop_assert_eq!(text.parse::<ItemId>(), Ok(id));
         }
     }

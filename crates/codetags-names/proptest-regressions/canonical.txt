@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 71bf664453a613c6f9f387219414263855cf82b02b5f1715692daa5a24eb9a4c # shrinks to scheme = "rust-analyzer", descriptors = [Descriptor { name: "impl", suffix: Method, disambiguator: Some("/") }]

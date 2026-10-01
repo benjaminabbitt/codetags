@@ -96,9 +96,22 @@ Then the index holds only the generations {string}
 ## Names
 
 `{word}` in the item-id steps is `file` or `symbol`. A `{string}` may be
-single-quoted to hold `"`.
+single-quoted to hold `"`. In the Windows-name steps, `{U+XXXX}` inside the
+expected string stands for that one code point.
 
 ```gherkin
+When the canonical name of the SCIP symbol {string} is taken
+Then the canonical name is {string}
+Then the symbol has no canonical name                # a local or a parameter
+Given these SCIP symbols:                            # table with column: symbol
+When their canonical names are assigned
+Then the collisions are:                             # table with columns: name | symbol; exact set
+Then there are no collisions
+
+When the name {string} is mapped for Windows         # the private-use mapping, D15
+Then the Windows name is {string}
+Then the Windows name maps back to {string}
+
 When the item id for {word} {string} is written     # file → file:<path>, symbol → sym:<name>
 Then the written id is {string}
 Then the written id reads back as {word} {string}

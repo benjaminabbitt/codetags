@@ -1,10 +1,13 @@
-//! Steps for `features/names/`: item ids and collision suffixes
-//! (PLAN.md §2.3, §2.7).
+//! Steps for `features/names/`: canonical names, the Windows private-use
+//! mapping, item ids, and collision suffixes (PLAN.md §2.3, §2.7, D15).
 
 use std::str::FromStr;
 
+use codetags_names::canonical::{CanonicalNames, canonical_name};
 use codetags_names::collision::apply_collision_suffixes;
 use codetags_names::item_id::ItemId;
+use codetags_names::scip::{self, Symbol};
+use codetags_names::windows::{from_windows_name, to_windows_name};
 use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
 
@@ -19,6 +22,126 @@ pub struct NamesState {
     entries: Vec<(String, String)>,
     /// The names collision suffixing produced, aligned with `entries`.
     named: Vec<String>,
+    /// The last canonical name taken: `None` for a symbol with none.
+    canonical: Option<Option<String>>,
+    /// SCIP symbols a table listed.
+    symbols: Vec<Symbol>,
+    /// The canonical names assigned to `symbols`.
+    assigned: Option<CanonicalNames>,
+    /// The last name mapped for Windows.
+    windows: Option<String>,
+}
+
+fn parse_symbol(text: &str) -> Symbol {
+    scip::parse(text).unwrap_or_else(|e| panic!("{text:?}: {e}"))
+}
+
+#[when(expr = "the canonical name of the SCIP symbol {string} is taken")]
+fn canonical_name_is_taken(world: &mut CodetagsWorld, symbol: String) {
+    let name = canonical_name(&parse_symbol(&symbol)).unwrap_or_else(|e| panic!("{e}"));
+    world.names.canonical = Some(name);
+}
+
+fn taken(world: &CodetagsWorld) -> Option<&str> {
+    world
+        .names
+        .canonical
+        .as_ref()
+        .expect("an earlier step took a canonical name")
+        .as_deref()
+}
+
+#[then(expr = "the canonical name is {string}")]
+fn the_canonical_name_is(world: &mut CodetagsWorld, expected: String) {
+    assert_eq!(taken(world), Some(expected.as_str()));
+}
+
+#[then(expr = "the symbol has no canonical name")]
+fn the_symbol_has_no_canonical_name(world: &mut CodetagsWorld) {
+    assert_eq!(taken(world), None);
+}
+
+#[given(expr = "these SCIP symbols:")]
+fn these_scip_symbols(world: &mut CodetagsWorld, step: &Step) {
+    world.names.symbols = rows(step)
+        .iter()
+        .map(|row| parse_symbol(&row["symbol"]))
+        .collect();
+}
+
+#[when(expr = "their canonical names are assigned")]
+fn their_canonical_names_are_assigned(world: &mut CodetagsWorld) {
+    let mut names = CanonicalNames::default();
+    for symbol in &world.names.symbols {
+        names.insert(symbol).unwrap_or_else(|e| panic!("{e}"));
+    }
+    world.names.assigned = Some(names);
+}
+
+/// The reported collisions as sorted `(name, symbol)` pairs.
+fn collisions(world: &CodetagsWorld) -> Vec<(String, String)> {
+    let names = world.names.assigned.as_ref().expect("names were assigned");
+    let mut pairs: Vec<(String, String)> = names
+        .collisions()
+        .into_iter()
+        .flat_map(|c| {
+            let name = c.name;
+            c.symbols.into_iter().map(move |s| (name.clone(), s))
+        })
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+#[then(expr = "the collisions are:")]
+fn the_collisions_are(world: &mut CodetagsWorld, step: &Step) {
+    let mut expected: Vec<(String, String)> = rows(step)
+        .into_iter()
+        .map(|row| (row["name"].clone(), row["symbol"].clone()))
+        .collect();
+    expected.sort();
+    assert_eq!(collisions(world), expected);
+}
+
+#[then(expr = "there are no collisions")]
+fn there_are_no_collisions(world: &mut CodetagsWorld) {
+    assert_eq!(collisions(world), vec![]);
+}
+
+/// Expands `{U+XXXX}` to that code point, so features can show private-use
+/// characters.
+fn expand_code_points(text: &str) -> String {
+    let re = regex::Regex::new(r"\{U\+([0-9A-Fa-f]{4,6})\}").expect("valid regex");
+    re.replace_all(text, |caps: &regex::Captures<'_>| {
+        let code = u32::from_str_radix(&caps[1], 16).expect("hex digits");
+        char::from_u32(code)
+            .expect("a Unicode scalar value")
+            .to_string()
+    })
+    .into_owned()
+}
+
+#[when(expr = "the name {string} is mapped for Windows")]
+fn the_name_is_mapped_for_windows(world: &mut CodetagsWorld, name: String) {
+    world.names.windows = Some(to_windows_name(&name));
+}
+
+fn windows(world: &CodetagsWorld) -> &str {
+    world
+        .names
+        .windows
+        .as_deref()
+        .expect("an earlier step mapped a name")
+}
+
+#[then(expr = "the Windows name is {string}")]
+fn the_windows_name_is(world: &mut CodetagsWorld, expected: String) {
+    assert_eq!(windows(world), expand_code_points(&expected));
+}
+
+#[then(expr = "the Windows name maps back to {string}")]
+fn the_windows_name_maps_back_to(world: &mut CodetagsWorld, expected: String) {
+    assert_eq!(from_windows_name(windows(world)), expected);
 }
 
 /// `{kind}` of an item id: `file` or `symbol`.
