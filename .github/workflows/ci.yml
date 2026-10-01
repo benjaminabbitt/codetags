@@ -329,6 +329,26 @@ jobs:
         shell: bash
         run: just setup-providers
 
+      # The pinned lspmux, as in the check job, for the LSP wiring scenarios
+      # (features/lsp/wiring.feature, `@lspmux @providers`): they need it and
+      # this toolchain's rust-analyzer, which setup-providers installs.
+      - name: lspmux revision from providers.toml
+        id: lspmux
+        shell: bash
+        run: echo "rev=$(sed -n '/^\[lspmux\]/,/^\[/s/^rev *= *"\(.*\)".*/\1/p' providers.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .codetags/local/bin
+            .codetags/local/.crates.toml
+            .codetags/local/.crates2.json
+          key: lspmux-${{ runner.os }}-${{ runner.arch }}-${{ steps.lspmux.outputs.rev }}
+
+      - name: just setup-lspmux
+        shell: bash
+        run: just setup-lspmux
+
       # Providers execute project code (build scripts, proc macros), so they
       # never run as root or admin (PLAN.md §0.10).
       - name: Assert unprivileged
@@ -342,11 +362,13 @@ jobs:
         shell: pwsh
         run: ci/run-deelevated.ps1 "$env:ProgramFiles\Git\bin\bash.exe" ci/assert-unprivileged.sh
 
+      # test-providers adds `providers` to the capabilities listed here.
       - name: just test-providers
         if: runner.os != 'Windows'
         shell: bash
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+          CODETAGS_BDD_CAPABILITIES: lspmux
         run: just test-providers
 
       - name: just test-providers (de-elevated)
@@ -354,6 +376,7 @@ jobs:
         shell: pwsh
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+          CODETAGS_BDD_CAPABILITIES: lspmux
         run: ci/run-deelevated.ps1 just test-providers
 
       # Per-file edge counts of each ingested fixture against tests/baselines
