@@ -453,7 +453,7 @@ codetags/
 - **Every job that runs product code** has a step asserting the process is unprivileged: euid ≠ 0, or the Windows token is not elevated.
 - **`bdd-coverage`:** needs every job that runs BDD, and checks that every scenario ran somewhere (rule 11).
 - **Triggers:** pushes to `main`, `spike/**` and `agent/**` (so agents can iterate on CI from their own branches), pull requests, and `workflow_dispatch`.
-- **Caching:** `Swatinem/rust-cache`. The bundled DuckDB compile is the slowest step.
+- **Caching:** `Swatinem/rust-cache`. DuckDB is not compiled: development and CI link the prebuilt library (§4, R1). Each job runs `cargo clean -p libduckdb-sys` after restoring the cache, so the library is downloaded again (V29).
 
 ## 6. Phase graph
 
@@ -486,7 +486,7 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 | P0.2 | MECH | Workspace skeleton: the §3 crates as stubs, and `rust-toolchain.toml`. |
 | P0.3 | MECH | justfile (Appendix A). |
 | P0.4 | CORE | cucumber harness (`codetags-bdd`), `docs/steps.md`, and the first feature, `features/cli/version.feature`. |
-| P0.5 | CORE | DuckDB smoke scenario on all three OSes: bundled build; write a generation; read it read-only from a second process. |
+| P0.5 | CORE | DuckDB smoke scenario on all three OSes: link the prebuilt library (R1); write a generation; read it read-only from a second process. |
 | P0.6 | MECH | tagma-core git dependency, plus a smoke scenario: ingest two items and run a postfix query. |
 | P0.7 | CORE | CI `check` job (§5), including the unprivileged assertion. |
 
@@ -663,13 +663,14 @@ This no longer gates anything (D2).
 
 | ID | Risk | Mitigation |
 |---|---|---|
-| R1 | The bundled DuckDB build is slow, especially on Windows CI. | Development and CI never compile DuckDB. They link the prebuilt library through `DUCKDB_DOWNLOAD_LIB` (§4, V29), so a cold `just check` takes about 1.5 minutes on the dev host, with no C++ compile. Only release builds enable `bundled-duckdb`. CI runs `cargo clean -p libduckdb-sys` after restoring its cache, because rust-cache prunes the downloaded library (V29). Residual risks: the download needs network on a cold `target/`, and it is not checksummed. |
+| R1 | The bundled DuckDB build is slow, especially on Windows CI. | Development and CI never compile DuckDB. They link the prebuilt library through `DUCKDB_DOWNLOAD_LIB` (§4, V29), so a cold `just check` takes about 1.5 minutes on the dev host, with no C++ compile. Only release builds enable `bundled-duckdb`. CI runs `cargo clean -p libduckdb-sys` after restoring its cache, because rust-cache prunes the downloaded library (V29). Residual risks: the download needs network on a cold `target/`, and it is not checksummed (R8). |
 | R2 | A provider does not run on some OS (e.g. scip-go, scip-python or Jelly on Windows). | V20; a per-OS exception approved by the human. |
 | R3 | tagma is in-memory with String keys, so it may not scale in memory or rebuild time. | O-3. Alternative: compile postfix queries to SQL over a DuckDB tag table, validated by tagma's own conformance features. |
 | R4 | The macOS NFS client caches despite `actimeo=0`, e.g. negative-name caching. | Spike S2 measures it. |
 | R5 | Proving "unprivileged" on Windows runners, which run as admin. | V18. |
 | R6 | Runner images drift; the `fusermount3` shadow is an example. | `codetags doctor` plus pinned runner labels. |
 | R7 | Deep query paths hit Windows' 260-character MAX_PATH and case-insensitive name handling on Windows and macOS. | The path profile; tests at the limits. |
+| R8 | libduckdb-sys downloads the prebuilt DuckDB archive over HTTPS without checking a checksum (V29), so a tampered or replaced release asset would be linked into development and CI builds. | A later task pins the archive's hash for each target and checks it before the library is used. |
 
 ---
 
