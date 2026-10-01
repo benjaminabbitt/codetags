@@ -28,7 +28,7 @@ codetags-bdd = { path = "crates/codetags-bdd" }
 
 # External crates. Pins and rationale: PLAN.md §4.
 # tagma is pinned by full SHA; `just dev-tagma PATH` overrides it locally.
-tagma-core = { git = "https://github.com/benjaminabbitt/tagma", rev = "9a2b04465c573ca70842cc83227ec4d732715c75" }
+tagma-core = { git = "https://github.com/benjaminabbitt/tagma", rev = "b1ae80880a26ef4fbb620280825abe593a925861" }
 duckdb = { version = "~1.10506", features = ["bundled"] }
 cucumber = "0.23"
 futures = "0.3"

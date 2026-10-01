@@ -10,6 +10,7 @@
 mod child;
 mod steps_cli;
 mod steps_model;
+mod steps_query;
 mod tags;
 
 use std::path::{Path, PathBuf};
@@ -54,6 +55,10 @@ pub struct CodetagsWorld {
     scratch: Option<tempfile::TempDir>,
     /// The DuckDB file a `Given` step created.
     database: Option<PathBuf>,
+    /// Items the tagma steps added.
+    tagma: tagma_core::Index,
+    /// Result of the last tagma query.
+    matched: Option<Result<Vec<String>, String>>,
 }
 
 impl CodetagsWorld {

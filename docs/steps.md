@@ -32,6 +32,17 @@ Then that process reads exactly {string}         # space-joined `v` values, sort
 Then that process's write is refused
 ```
 
+## tagma queries
+
+The wording matches tagma's own conformance steps (tagma `docs/steps.md`).
+
+```gherkin
+Given an item {string} tagged {string}       # id; whitespace-separated tags, parsed with tagma's Tag::parse
+When the postfix query {string} is run
+Then it matches exactly {string}             # whitespace-separated ids, compared as sorted sets; "" = none
+Then the query fails
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

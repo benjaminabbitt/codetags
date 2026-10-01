@@ -421,6 +421,7 @@ dependencies = [
  "codetags-model",
  "cucumber",
  "regex",
+ "tagma-core",
  "tempfile",
 ]
 
@@ -1939,6 +1940,11 @@ dependencies = [
  "sealed",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "tagma-core"
+version = "0.1.0"
+source = "git+https://github.com/benjaminabbitt/tagma?rev=b1ae80880a26ef4fbb620280825abe593a925861#b1ae80880a26ef4fbb620280825abe593a925861"
 
 [[package]]
 name = "tar"
