@@ -10,6 +10,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -124,18 +125,9 @@ fn start(lspmux_binary: &Path, address: &Address) -> Result<Daemon, String> {
         .append(true)
         .open(&log_path)
         .map_err(|error| format!("cannot open {}: {error}", log_path.display()))?;
-    let stderr = log
-        .try_clone()
-        .map_err(|error| format!("cannot use {}: {error}", log_path.display()))?;
-    let mut command = Command::new(lspmux_binary);
-    command
-        .arg("server")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(stderr);
-    let mut child = spawn_detached(&mut command)
+    let mut daemon = spawn_detached(lspmux_binary, &log)
         .map_err(|error| format!("cannot start {} server: {error}", lspmux_binary.display()))?;
-    let pid = child.id();
+    let pid = daemon.pid;
     let _ = writeln!(log, "{STARTED_MARK} (pid {pid}) on {address}");
     let pid_path = pid_file(address);
     std::fs::write(&pid_path, format!("{pid}\n"))
@@ -145,7 +137,7 @@ fn start(lspmux_binary: &Path, address: &Address) -> Result<Daemon, String> {
         if is_answering(address) {
             return Ok(Daemon::Started(pid));
         }
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Some(Ok(Some(status))) = daemon.child.as_mut().map(std::process::Child::try_wait) {
             return Err(format!(
                 "lspmux server exited ({status}) before answering on {address}; see {}",
                 log_path.display()
@@ -159,38 +151,128 @@ fn start(lspmux_binary: &Path, address: &Address) -> Result<Daemon, String> {
     ))
 }
 
-/// Spawns `command` so it outlives this process and its session: its own
-/// process group on Unix, so the editor's signals to its group miss it; on
-/// Windows detached, in its own process group, and out of the editor's job
-/// object when the job allows that.
-#[cfg(unix)]
-fn spawn_detached(command: &mut Command) -> std::io::Result<std::process::Child> {
-    use std::os::unix::process::CommandExt;
-
-    command.process_group(0).spawn()
+/// A started daemon: its process id, and on Unix its handle.
+struct Detached {
+    pid: u32,
+    child: Option<std::process::Child>,
 }
 
-/// See the Unix version.
-#[cfg(windows)]
-fn spawn_detached(command: &mut Command) -> std::io::Result<std::process::Child> {
-    use std::os::windows::process::CommandExt;
+/// Starts `lspmux server` so it outlives this process and its session, with
+/// its stderr appended to `log`. On Unix it gets its own process group, so
+/// the editor's signals to its group miss it; Rust closes every other
+/// descriptor in the child.
+#[cfg(unix)]
+fn spawn_detached(lspmux_binary: &Path, log: &std::fs::File) -> std::io::Result<Detached> {
+    use std::os::unix::process::CommandExt;
 
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-    match command
-        .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
-        .spawn()
-    {
-        Ok(child) => Ok(child),
-        // The job forbids breakaway: stay in it.
-        Err(_) => command.creation_flags(flags).spawn(),
-    }
+    let child = Command::new(lspmux_binary)
+        .arg("server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log.try_clone()?)
+        .process_group(0)
+        .spawn()?;
+    Ok(Detached {
+        pid: child.id(),
+        child: Some(child),
+    })
+}
+
+/// On Windows, `std::process::Command` always lets the child inherit every
+/// inheritable handle of this process (its `inherit_handles(false)` is
+/// unstable), including the pipes the editor gave this shim. A daemon that
+/// outlives the shim would hold them open, so the editor would never see the
+/// server's output end. So the daemon is created with `CreateProcessW` and no
+/// inherited handles at all, detached and in its own process group, and out
+/// of the editor's job object when the job allows it. It has no standard
+/// handles, so its own log output is lost; the start line still goes to the
+/// log. Its environment is this process's.
+#[cfg(windows)]
+fn spawn_detached(lspmux_binary: &Path, _log: &std::fs::File) -> std::io::Result<Detached> {
+    windows_spawn::detached(lspmux_binary, "server").map(|pid| Detached { pid, child: None })
 }
 
 /// Neither Unix nor Windows: a plain spawn.
 #[cfg(not(any(unix, windows)))]
-fn spawn_detached(command: &mut Command) -> std::io::Result<std::process::Child> {
-    command.spawn()
+fn spawn_detached(lspmux_binary: &Path, log: &std::fs::File) -> std::io::Result<Detached> {
+    let child = Command::new(lspmux_binary)
+        .arg("server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log.try_clone()?)
+        .spawn()?;
+    Ok(Detached {
+        pid: child.id(),
+        child: Some(child),
+    })
+}
+
+/// `CreateProcessW` without handle inheritance: this crate's only unsafe
+/// code. The unsafe part is the one call and closing the two handles it
+/// returns.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows_spawn {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CreateProcessW, DETACHED_PROCESS,
+        PROCESS_INFORMATION, STARTUPINFOW,
+    };
+    use windows::core::{PCWSTR, PWSTR};
+
+    /// Starts `program argument` detached, inheriting no handles; its pid.
+    pub(super) fn detached(program: &Path, argument: &str) -> std::io::Result<u32> {
+        let wide = |text: &std::ffi::OsStr| -> Vec<u16> { text.encode_wide().chain([0]).collect() };
+        let application = wide(program.as_os_str());
+        // The program's path quoted (no quotes can occur in a Windows path),
+        // then the argument, which needs none.
+        let mut command_line: Vec<u16> =
+            wide(format!("\"{}\" {argument}", program.display()).as_ref());
+        let startup = STARTUPINFOW {
+            cb: u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(u32::MAX),
+            ..Default::default()
+        };
+        let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        let mut last = None;
+        for flags in [flags | CREATE_BREAKAWAY_FROM_JOB, flags] {
+            let mut info = PROCESS_INFORMATION::default();
+            // SAFETY: every pointer is to a live, NUL-terminated buffer or
+            // struct owned by this frame; `command_line` is mutable, as the
+            // call requires; no handles are inherited.
+            let created = unsafe {
+                CreateProcessW(
+                    PCWSTR(application.as_ptr()),
+                    Some(PWSTR(command_line.as_mut_ptr())),
+                    None,
+                    None,
+                    false,
+                    flags,
+                    None,
+                    PCWSTR::null(),
+                    &startup,
+                    &mut info,
+                )
+            };
+            match created {
+                Ok(()) => {
+                    // SAFETY: both handles were just returned by
+                    // CreateProcessW and are closed once.
+                    unsafe {
+                        let _ = CloseHandle(info.hThread);
+                        let _ = CloseHandle(info.hProcess);
+                    }
+                    return Ok(info.dwProcessId);
+                }
+                // A job that forbids breakaway refuses the first attempt.
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(std::io::Error::other(last.map_or_else(
+            || "CreateProcessW failed".to_string(),
+            |error| error.to_string(),
+        )))
+    }
 }

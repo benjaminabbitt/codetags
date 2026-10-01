@@ -21,6 +21,11 @@ toml.workspace = true
 # reads this user's uid for the socket directory's owner check (MIT).
 nix = { workspace = true, features = ["signal", "user"] }
 
+[target.'cfg(windows)'.dependencies]
+# CreateProcessW without handle inheritance, for the detached lspmux daemon
+# (codetags_lsp::daemon). MIT OR Apache-2.0.
+windows = { workspace = true, features = ["Win32_Security", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 

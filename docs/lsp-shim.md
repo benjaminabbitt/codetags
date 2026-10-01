@@ -84,7 +84,8 @@ shim):
   (brief §4.2: the proxy's watcher is authoritative);
 - starts `lspmux server` if nothing answers, detached, under a lock so two
   shims never start two (D21, V117), with its log at `lspmux.log` beside the
-  socket;
+  socket. On Windows the daemon inherits no handles (V125), so that log holds
+  only the shim's start lines;
 - runs `lspmux client --server-path <server>` and relays the session through
   it message by message;
 - **agent role** (D16): drops the client's `textDocument/didOpen`,
