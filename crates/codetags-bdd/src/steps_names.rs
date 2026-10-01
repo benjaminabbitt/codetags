@@ -1,22 +1,18 @@
-//! Steps for `features/names/`: the path profile, item ids, and collision
-//! suffixes (PLAN.md §2.3, §2.7).
+//! Steps for `features/names/`: item ids and collision suffixes
+//! (PLAN.md §2.3, §2.7).
 
 use std::str::FromStr;
 
 use codetags_names::collision::apply_collision_suffixes;
 use codetags_names::item_id::ItemId;
-use codetags_names::path_profile::{decode_component, encode_component};
-use codetags_names::platform::{Platform, is_legal_filename};
 use cucumber::gherkin::Step;
-use cucumber::{Parameter, given, then, when};
+use cucumber::{given, then, when};
 
 use crate::CodetagsWorld;
 
 /// State the names steps share within one scenario.
 #[derive(Debug, Default)]
 pub struct NamesState {
-    /// The last path component the encoder produced.
-    component: Option<String>,
     /// The last item id written.
     item_id: Option<String>,
     /// Directory entries as `(name, id)`, in table order.
@@ -25,98 +21,12 @@ pub struct NamesState {
     named: Vec<String>,
 }
 
-/// `{platforms}`: one or more of `linux`, `macos`, `windows`, joined by
-/// `, ` or ` and `.
-#[derive(Debug, Parameter)]
-#[param(
-    name = "platforms",
-    regex = "(?:linux|macos|windows)(?:(?:, | and )(?:linux|macos|windows))*"
-)]
-struct Platforms(Vec<Platform>);
-
-impl FromStr for Platforms {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.replace(" and ", ", ")
-            .split(", ")
-            .map(Platform::from_str)
-            .collect::<Result<_, _>>()
-            .map(Platforms)
-    }
-}
-
 /// `{kind}` of an item id: `file` or `symbol`.
 fn item_id(kind: &str, value: String) -> ItemId {
     match kind {
         "file" => ItemId::File(value),
         "symbol" => ItemId::Symbol(value),
         other => panic!("unknown item kind {other:?}: use file or symbol"),
-    }
-}
-
-fn component(world: &CodetagsWorld) -> &str {
-    world
-        .names
-        .component
-        .as_deref()
-        .expect("an earlier step encoded a component")
-}
-
-#[when(expr = "the query element {string} is encoded as a path component")]
-fn element_is_encoded(world: &mut CodetagsWorld, element: String) {
-    let encoded = encode_component(&element).unwrap_or_else(|e| panic!("{element:?}: {e}"));
-    world.names.component = Some(encoded);
-}
-
-#[then(expr = "the path component is {string}")]
-fn the_component_is(world: &mut CodetagsWorld, expected: String) {
-    assert_eq!(component(world), expected);
-}
-
-#[then(expr = "the path component is a legal file name on {platforms}")]
-fn the_component_is_legal(world: &mut CodetagsWorld, platforms: Platforms) {
-    let name = component(world);
-    for platform in platforms.0 {
-        assert!(
-            is_legal_filename(name, platform),
-            "{name:?} is not a legal file name on {platform}"
-        );
-    }
-}
-
-#[then(expr = "the path component decodes to {string} on {platforms}")]
-fn the_component_decodes_to(world: &mut CodetagsWorld, element: String, platforms: Platforms) {
-    let name = component(world).to_string();
-    decodes_to(&name, &element, platforms);
-}
-
-#[then(expr = "the path component {string} decodes to {string} on {platforms}")]
-fn the_named_component_decodes_to(
-    _world: &mut CodetagsWorld,
-    name: String,
-    element: String,
-    platforms: Platforms,
-) {
-    decodes_to(&name, &element, platforms);
-}
-
-fn decodes_to(name: &str, element: &str, platforms: Platforms) {
-    for platform in platforms.0 {
-        let decoded = decode_component(name, platform)
-            .unwrap_or_else(|e| panic!("{name:?} on {platform}: {e}"));
-        assert_eq!(decoded, element, "decoding {name:?} on {platform}");
-    }
-}
-
-#[then(expr = "the path component {string} does not decode on {platforms}")]
-fn does_not_decode(_world: &mut CodetagsWorld, name: String, platforms: Platforms) {
-    for platform in platforms.0 {
-        let decoded = decode_component(&name, platform);
-        assert!(
-            decoded.is_err(),
-            "{name:?} decoded on {platform} to {decoded:?}"
-        );
     }
 }
 
