@@ -93,8 +93,11 @@ test:
 # Gherkin features (PLAN.md §0.2) that need no mount, provider, or privilege.
 # Jobs with more capabilities set CODETAGS_BDD_CAPABILITIES (codetags-bdd).
 # Every cargo invocation here selects --workspace: a narrower selection unifies
-# features differently and rebuilds dependencies.
+# features differently and rebuilds dependencies. Builds every workspace
+# binary first: features/lsp runs codetags-lsp, which the bdd test (in the
+# codetags package) does not build.
 bdd:
+    cargo build --workspace --bins --quiet
     cargo test --workspace --test bdd
 
 # Validates this repo's .codetags/tags (P6.2). Vacuously green while no tags
@@ -110,12 +113,15 @@ tags-check:
 # `codetags doctor` explains what is missing. On Windows it also runs S4's
 # name probe (crates/codetags-mount-winfsp/tests/name_probe.rs).
 test-mount:
+    cargo build --workspace --bins --quiet
     CODETAGS_BDD_CAPABILITIES={{ if os() == "windows" { "mount,winfsp" } else { "mount" } }} cargo test --workspace --test bdd
     if [ "{{ os() }}" = windows ]; then cargo test --workspace --test name_probe -- --ignored --nocapture; fi
 
 # Index features against the fixtures (P1): the bdd suite with the
-# `providers` capability enabled. Run `setup-providers` first.
+# `providers` capability enabled. Run `setup-providers` first. Builds every
+# workspace binary first, as `bdd` does.
 test-providers:
+    cargo build --workspace --bins --quiet
     CODETAGS_BDD_CAPABILITIES=providers cargo test --workspace --test bdd
 
 # The provider fixtures whose edge counts are baselined in tests/baselines:
