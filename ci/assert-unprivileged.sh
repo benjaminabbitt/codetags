@@ -20,7 +20,7 @@ case "$(uname -s)" in
       if grep -qx 'windows: assert-unprivileged' "$skips"; then
         echo "assert-unprivileged: elevated; listed as pending in ci/expected-skips.txt (V18)"
       else
-        echo "assert-unprivileged: elevated, and not listed in ci/expected-skips.txt" >&2
+        echo "assert-unprivileged: elevated, and not listed in ci/expected-skips.txt; in CI, run it through ci/run-deelevated.ps1 (V18)" >&2
         exit 1
       fi
     else

@@ -11,6 +11,8 @@ decimal integer.
 ## Commands
 
 ```gherkin
+Given the environment variable {string} is {string}
+      # set for processes that `codetags is run with` starts in this scenario
 When codetags is run with {string}      # args split on whitespace; captures exit status, stdout, stderr
 Then it exits with status {int}
 Then stdout matches {string}            # Rust `regex` syntax, unanchored unless the pattern anchors itself
@@ -45,17 +47,23 @@ Then the query fails
 
 ## Live mounts
 
-The Linux FUSE spike (P0b S1) is the first backend, and the macOS NFS
-loopback spike (P0b S2) the second. The mount steps that mount or unmount are
-defined on Linux and macOS only; tag scenarios that use them `@mount` and with
-the OS. The mount is unmounted, if still mounted, when the scenario ends.
+The Linux FUSE spike (P0b S1) is the first backend, the macOS NFS loopback
+spike (P0b S2) the second, and the Windows WinFsp spike (P0b S3) the third.
+The mount steps that mount or unmount are defined on Linux, macOS and Windows;
+tag scenarios that use them `@mount` and with the OS, and on Windows also
+`@winfsp`. The mount is unmounted, if still mounted, when the scenario ends.
+
+On Windows the mount point is a directory that does not exist yet: WinFsp
+creates it on mount and removes it on unmount, so there "the mount directory
+is empty again" also holds when the directory is gone.
 
 ```gherkin
 Given the hello filesystem is mounted on an empty directory
       # the spike's read-only, one-file filesystem, mounted unprivileged on a
       # new directory in the scenario's scratch directory: through fusermount3
       # on Linux (S1); on macOS (S2) served by an in-process NFSv3 server on
-      # 127.0.0.1 and mounted with /sbin/mount_nfs, with actimeo=0
+      # 127.0.0.1 and mounted with /sbin/mount_nfs, with actimeo=0; on
+      # Windows (S3) through WinFsp
 Given a fusermount3 that is not setuid root comes first on PATH
       # Unix only: puts a fake, non-setuid fusermount3 first on PATH and
       # unsets FUSERMOUNT_PATH, for processes that `codetags is run with` starts

@@ -83,11 +83,28 @@ fn mount_backend(report: &mut Report) {
     }
 }
 
+/// WinFsp is optional (D3): without it, doctor reports the fallback and still
+/// exits 0, since static views and the CLI work. The attribution notice is
+/// required by WinFsp's FLOSS exception (V14).
 #[cfg(windows)]
 fn mount_backend(report: &mut Report) {
+    use codetags_mount_winfsp::availability::{ATTRIBUTION, FALLBACK, REPO_URL};
+
+    report.lines.push("mount backend: winfsp".to_string());
+    match codetags_mount_winfsp::load() {
+        Ok(winfsp) => report.lines.push(format!(
+            "winfsp: {} (version {})",
+            winfsp.dll().display(),
+            winfsp.version()
+        )),
+        Err(why) => {
+            report.lines.push(format!("winfsp: {why}"));
+            report.lines.push(FALLBACK.to_string());
+        }
+    }
     report
         .lines
-        .push("mount backend: winfsp (not built yet: P0b S3)".to_string());
+        .push(format!("notice: {ATTRIBUTION} <{REPO_URL}>"));
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

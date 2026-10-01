@@ -58,16 +58,41 @@ jobs:
           tool: cargo-deny
 
       - name: Assert unprivileged
+        if: runner.os != 'Windows'
         shell: bash
         run: ci/assert-unprivileged.sh
+
+      # Hosted Windows runners are elevated; ci/run-deelevated.ps1 runs a
+      # command with the Administrators group made deny-only (V18).
+      - name: Assert unprivileged (de-elevated)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ci/run-deelevated.ps1 "$env:ProgramFiles\Git\bin\bash.exe" ci/assert-unprivileged.sh
 
       # The BDD runner records each scenario it runs in CODETAGS_BDD_RAN, for
       # the bdd-coverage job (PLAN.md §0.11).
       - name: just check
+        if: runner.os != 'Windows'
         shell: bash
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
         run: just check
+
+      # No WinFsp here (D3): the binary, built with the WinFsp backend, must
+      # start, and doctor must report the fallback.
+      - name: just check (de-elevated)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+        run: ci/run-deelevated.ps1 just check
+
+      # The fallback with WinFsp really absent; the BDD scenario forces it
+      # with CODETAGS_WINFSP=off so that it holds in the WinFsp job too.
+      - name: just doctor (de-elevated)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ci/run-deelevated.ps1 just doctor
 
       - name: Upload the BDD record
         if: ${{ !cancelled() }}
@@ -240,14 +265,29 @@ jobs:
       # Providers execute project code (build scripts, proc macros), so they
       # never run as root or admin (PLAN.md §0.10).
       - name: Assert unprivileged
+        if: runner.os != 'Windows'
         shell: bash
         run: ci/assert-unprivileged.sh
 
+      # Hosted Windows runners are elevated; see the check job (V18).
+      - name: Assert unprivileged (de-elevated)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ci/run-deelevated.ps1 "$env:ProgramFiles\Git\bin\bash.exe" ci/assert-unprivileged.sh
+
       - name: just test-providers
+        if: runner.os != 'Windows'
         shell: bash
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
         run: just test-providers
+
+      - name: just test-providers (de-elevated)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+        run: ci/run-deelevated.ps1 just test-providers
 
       - name: Upload the BDD record
         if: ${{ !cancelled() }}
@@ -257,13 +297,68 @@ jobs:
           path: ${{ runner.temp }}/bdd-ran.txt
           if-no-files-found: warn
 
+  # PLAN.md §5: live WinFsp mounts from a de-elevated process (P0b S3).
+  # WinFsp is installed elevated, as an admin would once (D3).
+  mount-windows:
+    name: mount (windows-2025, winfsp)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # rust-cache prunes files it does not recognise under target/ before
+      # saving, including the downloaded libduckdb and its copy in deps/, but
+      # keeps libduckdb-sys's build-script fingerprint. On a warm cache the
+      # build script would not run again, and linking fails with "unable to
+      # find library -lduckdb" (V29). Cleaning the package makes it download
+      # the library again (a few seconds).
+      - name: Re-fetch the prebuilt libduckdb
+        shell: bash
+        run: cargo clean -p libduckdb-sys
+
+      - uses: extractions/setup-just@v2
+
+      # Runner setup, not product code, so elevation is fine here.
+      - name: Install WinFsp
+        shell: pwsh
+        run: |
+          choco install winfsp -y --no-progress
+          Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp' | Select-Object InstallDir
+
+      - name: Assert unprivileged (de-elevated)
+        shell: pwsh
+        run: ci/run-deelevated.ps1 "$env:ProgramFiles\Git\bin\bash.exe" ci/assert-unprivileged.sh
+
+      - name: just doctor (de-elevated)
+        shell: pwsh
+        run: ci/run-deelevated.ps1 just doctor
+
+      - name: just test-mount (de-elevated)
+        shell: pwsh
+        env:
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+        run: ci/run-deelevated.ps1 just test-mount
+
+      - name: Upload the BDD record
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-ran-mount-windows
+          path: ${{ runner.temp }}/bdd-ran.txt
+          if-no-files-found: warn
+
   # PLAN.md §0.11: every scenario must run in some job, or be listed in
   # ci/expected-skips.txt. Runs whether the BDD jobs pass or fail, so a
   # failing run still reports what went unrun. Add every job that runs BDD
   # to `needs`.
   bdd-coverage:
     name: bdd-coverage
-    needs: [check, mount-linux, mount-macos, providers]
+    needs: [check, mount-linux, mount-macos, providers, mount-windows]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:

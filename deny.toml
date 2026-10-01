@@ -27,15 +27,19 @@ allow = [
     "Unicode-3.0",
     "Zlib",
 ]
-# Scoped exceptions (D9), added when the crate lands:
-# - winfsp, winfsp-sys: GPL-3.0, only beneath codetags-mount-winfsp (P5.3/S3).
-# - lspx: EUPL-1.2, its own crate only (P3.0).
+# Scoped exceptions (D9), each added when its crate lands:
+# - winfsp, winfsp-sys: GPL-3.0, for the Windows WinFsp backend (D9, V28;
+#   P0b S3). [bans] below keeps them beneath codetags-mount-winfsp. Windows
+#   binaries built with that backend are distributed under GPL-3.0.
+# - lspx: EUPL-1.2, its own crate only (P3.0); not yet added.
 exceptions = [
     # The Unlicense (permissive, OSI-approved public-domain dedication), scoped
     # to the nfs3 crates under codetags-mount-nfs (P0b S2, V42). Pending the
     # human's approval (PLAN.md §0.12); the alternative, nfsserve, needs none.
     { crate = "nfs3_types", allow = ["Unlicense"] },
     { crate = "nfs3_macros", allow = ["Unlicense"] },
+    { crate = "winfsp", allow = ["GPL-3.0"] },
+    { crate = "winfsp-sys", allow = ["GPL-3.0"] },
 ]
 
 [licenses.private]
@@ -46,3 +50,9 @@ ignore = false
 multiple-versions = "allow"
 wildcards = "deny"
 allow-wildcard-paths = true
+# GPL-3.0 stays beneath codetags-mount-winfsp (D9, PLAN.md §0.12): only it may
+# depend on winfsp directly, and only winfsp (or it) on winfsp-sys.
+deny = [
+    { crate = "winfsp", wrappers = ["codetags-mount-winfsp"] },
+    { crate = "winfsp-sys", wrappers = ["codetags-mount-winfsp", "winfsp"] },
+]

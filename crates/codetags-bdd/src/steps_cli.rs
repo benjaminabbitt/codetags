@@ -2,9 +2,14 @@
 
 use std::process::Command;
 
-use cucumber::{then, when};
+use cucumber::{given, then, when};
 
 use crate::{CODETAGS_BIN, CodetagsWorld};
+
+#[given(expr = "the environment variable {string} is {string}")]
+fn the_environment_variable_is(world: &mut CodetagsWorld, name: String, value: String) {
+    world.env.push((name.into(), value.into()));
+}
 
 #[when(expr = "codetags is run with {string}")]
 fn codetags_is_run_with(world: &mut CodetagsWorld, args: String) {

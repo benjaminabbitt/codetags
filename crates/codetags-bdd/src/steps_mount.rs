@@ -1,5 +1,6 @@
 //! Steps for live mounts. The Linux FUSE spike (P0b S1) is the first backend;
-//! the macOS NFS loopback spike (P0b S2) the second.
+//! the macOS NFS loopback spike (P0b S2) the second, and the Windows WinFsp
+//! spike (P0b S3) the third.
 
 use cucumber::{given, then};
 
@@ -175,6 +176,33 @@ mod macos {
     }
 }
 
+/// The Windows WinFsp spike (P0b S3). The mount point must not exist yet:
+/// WinFsp creates the directory, and removes it again on unmount.
+#[cfg(windows)]
+mod windows {
+    use cucumber::{given, when};
+
+    use crate::CodetagsWorld;
+
+    #[given(expr = "the hello filesystem is mounted on an empty directory")]
+    fn hello_is_mounted(world: &mut CodetagsWorld) {
+        use codetags_mount_winfsp::spike::{Mode, mount_hello};
+
+        let dir = world.scratch().join("mnt");
+        let winfsp = codetags_mount_winfsp::load()
+            .unwrap_or_else(|why| panic!("WinFsp is needed for this scenario: {why}"));
+        let mounted = mount_hello(&winfsp, &dir, Mode::ReadOnly).expect("mount through WinFsp");
+        world.mount = Some(mounted);
+        world.mount_dir = Some(dir);
+    }
+
+    #[when(expr = "the mount is unmounted")]
+    fn the_mount_is_unmounted(world: &mut CodetagsWorld) {
+        let mounted = world.mount.take().expect("a Given step mounted something");
+        mounted.unmount().expect("unmount");
+    }
+}
+
 #[then(expr = "the mount lists exactly {string}")]
 fn the_mount_lists_exactly(world: &mut CodetagsWorld, expected: String) {
     let dir = world
@@ -213,6 +241,11 @@ fn the_mount_directory_is_empty_again(world: &mut CodetagsWorld) {
         .mount_dir
         .as_ref()
         .expect("a Given step mounted something");
+    // WinFsp removes the mount point directory it created; nothing is left.
+    #[cfg(windows)]
+    if !dir.exists() {
+        return;
+    }
     let leftovers: Vec<_> = std::fs::read_dir(dir)
         .expect("list the unmounted directory")
         .collect();

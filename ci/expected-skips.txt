@@ -14,4 +14,3 @@
 #       <placeholders>). At least two spaces, then '#' and a reason, are
 #       required. ci/bdd-coverage.py reads these; it fails on an entry that is
 #       malformed, names no scenario, or ran in some job anyway.
-windows: assert-unprivileged

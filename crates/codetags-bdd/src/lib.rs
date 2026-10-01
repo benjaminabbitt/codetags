@@ -65,6 +65,9 @@ pub struct CodetagsWorld {
     /// same reason.
     #[cfg(target_os = "macos")]
     nfs_mount: Option<codetags_mount_nfs::mount::Mounted>,
+    /// A live WinFsp mount, likewise declared before `scratch`.
+    #[cfg(windows)]
+    mount: Option<codetags_mount_winfsp::spike::Mounted>,
     /// Where the live mount is (or was).
     mount_dir: Option<PathBuf>,
     /// The last process a step ran.

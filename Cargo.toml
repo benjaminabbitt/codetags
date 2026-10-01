@@ -50,6 +50,13 @@ getrandom = "0.3"
 scip = "=0.10.0"
 protobuf = "=3.7.2"
 notify = "8.2"
+# GPL-3.0, allowed only beneath codetags-mount-winfsp (D9, deny.toml). The
+# default features (`full`: notify, delayload, async-io) are kept; no
+# `system`, so building needs no WinFsp install (V28).
+winfsp = "0.13"
+winfsp-sys = "0.12"
+# The version winfsp 0.13 uses, for registry and DLL loading in the backend.
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Storage_FileSystem"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -21,6 +21,8 @@ regex.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 codetags-mount-nfs.workspace = true
+[target.'cfg(windows)'.dependencies]
+codetags-mount-winfsp.workspace = true
 
 [lints]
 workspace = true

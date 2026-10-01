@@ -8,7 +8,22 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-[dependencies]
+# winfsp and winfsp-sys are GPL-3.0. D9 allows them here and nowhere else;
+# deny.toml enforces that (PLAN.md §0.12). A Windows binary built with this
+# backend is distributed under GPL-3.0.
+[target.'cfg(windows)'.dependencies]
+winfsp.workspace = true
+winfsp-sys.workspace = true
+windows.workspace = true
+
+# The delay-load linker flags come from winfsp's build helper. As a build
+# dependency, `cfg(windows)` here is the host, so a cross-check from Linux
+# skips it (and build.rs then emits nothing).
+[target.'cfg(windows)'.build-dependencies]
+winfsp.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
