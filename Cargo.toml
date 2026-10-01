@@ -49,6 +49,7 @@ getrandom = "0.3"
 # upgrade). protobuf is the version scip itself pins (V63).
 scip = "=0.10.0"
 protobuf = "=3.7.2"
+notify = "8.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

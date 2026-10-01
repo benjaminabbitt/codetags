@@ -197,6 +197,37 @@ Then at {int} ms the coalescer flushes nothing
 Then the flushed batch is marked as a rescan
 ```
 
+The watcher steps run a real watcher, with the default coalescer settings,
+over a project directory in a fresh scratch directory. Files are written with
+the content `<path> <n>`, where `n` counts writes in the scenario, so every
+write changes the size or the content.
+
+```gherkin
+Given a project directory holding the files {string}
+      # whitespace-separated project-relative paths, created with their parents
+Given a project directory holding {int} files in {string}
+      # <dir>/f001.rs, <dir>/f002.rs, …
+Given the project is being watched           # Watcher::start on the project directory
+When the file {string} is written            # created, or truncated and rewritten in place; parents created
+When the file {string} is replaced the way sed -i does it
+      # writes a temporary file in the same directory, then renames it over the target
+When a formatter rewrites every file in {string}   # in place, in name order, back to back
+When the file {string} is deleted
+When the directory {string} is created holding the files {string}
+      # creates the directory and its parents, then writes the files (names relative to it) at once
+When the directory {string} is deleted       # recursively
+When git takes its index lock                # creates .git/index.lock
+When git releases its index lock             # renames .git/index.lock to .git/index
+When the watcher is told its events overflowed     # Watcher::rescan, as notify's Flag::Rescan does
+Then within {int} seconds the watcher reports exactly {string}   # changes
+      # merges the batches received since the last assertion with the coalescer's rule;
+      # passes once they equal the changes and stay so for one more second
+Then within {int} seconds the watcher reports {int} changed files in {string} and nothing else
+Then the watcher reports nothing for {int} seconds
+Then a batch the watcher reported was marked as a rescan
+      # any batch since the watch started
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

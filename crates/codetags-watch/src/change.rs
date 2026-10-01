@@ -84,7 +84,7 @@ pub enum RescanCause {
     /// notify reported an error other than a watch limit, so events may have
     /// been lost. Holds notify's message.
     WatchError(String),
-    /// The watcher was asked for one.
+    /// [`crate::Watcher::rescan`] asked for one.
     Requested,
 }
 
