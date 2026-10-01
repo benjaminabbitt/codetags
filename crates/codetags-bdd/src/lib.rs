@@ -14,6 +14,7 @@ mod steps_index;
 mod steps_index_go;
 mod steps_index_python;
 mod steps_index_ts;
+mod steps_lsp;
 mod steps_model;
 mod steps_mount;
 mod steps_names;
@@ -109,6 +110,9 @@ pub struct CodetagsWorld {
     /// `watch`, so the watcher stops before the helper does.
     #[cfg(unix)]
     privhelper: steps_privhelper::HelperState,
+    // M3 stage 0 (codetags-lsp): state for features/lsp/.
+    /// The fake language server and what the recorder passed through.
+    lsp: steps_lsp::LspState,
 }
 
 impl CodetagsWorld {

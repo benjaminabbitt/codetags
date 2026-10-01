@@ -59,6 +59,7 @@ pub fn maybe_run_child() {
         store if store.starts_with(crate::steps_store::CHILD_PREFIX) => {
             crate::steps_store::child(store)
         }
+        crate::steps_lsp::CHILD_MODE => crate::steps_lsp::fake_server(),
         other => Err(format!("unknown child mode {other:?}")),
     };
     match result {

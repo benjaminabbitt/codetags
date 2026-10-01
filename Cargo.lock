@@ -521,6 +521,16 @@ name = "codetags-ipc"
 version = "0.1.0"
 
 [[package]]
+name = "codetags-lsp"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "nix",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codetags-materialize"
 version = "0.1.0"
 

@@ -412,6 +412,40 @@ Then the file {string} in the scenario's directory holds the JSON:
       # docstring; compared as parsed JSON values
 ```
 
+## LSP recorder (M3 stage 0)
+
+`codetags-lsp record` (PLAN.md D18) between a scripted client and a fake
+language server: the BDD runner's own executable in child mode `fake-lsp`.
+The fake server prints `fake-lsp 9.9.9` for `--version`. Otherwise it
+answers `initialize` with response 1 (its headers in the order
+`Content-Type`, `Content-Length`), then sends a `window/logMessage`
+notification and a `client/registerCapability` request with id 900; it
+answers `shutdown` with response 2, and stops at `exit` or end of input. It
+always exits with the status its `Given` step names.
+
+```gherkin
+Given a fake language server                          # exits with status 0
+Given a fake language server that exits with status {int}
+When a scripted LSP session runs through codetags-lsp record
+      # the client writes initialize (id 1, with a Content-Type header and
+      # non-ASCII text), initialized, a response with id 900, shutdown (id 2)
+      # and exit, closes its end, and captures stdout and the exit status;
+      # bodies are spaced as no serializer would write them
+When codetags-lsp record runs the fake server with the arguments {string}
+      # args after `--`, split on whitespace; stdin is empty; captures exit
+      # status, stdout, stderr
+Then the fake server received exactly the bytes the client sent
+Then the client received exactly the bytes the fake server sent
+Then the recording holds {int} messages               # log lines with a `from` field
+Then the recording shows {string} sent by the {word}
+      # exactly one message from `client` or `server`: a method name, or
+      # "response <id>" for a response with that JSON id
+Then no recording was written                         # the --log file does not exist
+```
+
+`it exits with status {int}` and `stdout matches {string}` (Commands) apply
+to the recorder's run.
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,
