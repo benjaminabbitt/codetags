@@ -59,6 +59,26 @@ jobs:
         with:
           tool: cargo-deny
 
+      # The pinned lspmux for the @lspmux scenarios (M3; PLAN.md D19), built
+      # once per OS and revision: with the cache restored, `just
+      # setup-lspmux` neither builds nor fetches.
+      - name: lspmux revision from providers.toml
+        id: lspmux
+        shell: bash
+        run: echo "rev=$(sed -n '/^\[lspmux\]/,/^\[/s/^rev *= *"\(.*\)".*/\1/p' providers.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .codetags/local/bin
+            .codetags/local/.crates.toml
+            .codetags/local/.crates2.json
+          key: lspmux-${{ runner.os }}-${{ runner.arch }}-${{ steps.lspmux.outputs.rev }}
+
+      - name: just setup-lspmux
+        shell: bash
+        run: just setup-lspmux
+
       - name: Assert unprivileged
         if: runner.os != 'Windows'
         shell: bash
@@ -72,12 +92,14 @@ jobs:
         run: ci/run-deelevated.ps1 "$env:ProgramFiles\Git\bin\bash.exe" ci/assert-unprivileged.sh
 
       # The BDD runner records each scenario it runs in CODETAGS_BDD_RAN, for
-      # the bdd-coverage job (PLAN.md §0.11).
+      # the bdd-coverage job (PLAN.md §0.11). The `lspmux` capability runs
+      # the LSP shim's scenarios against the lspmux installed above.
       - name: just check
         if: runner.os != 'Windows'
         shell: bash
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+          CODETAGS_BDD_CAPABILITIES: lspmux
         run: just check
 
       # No WinFsp here (D3): the binary, built with the WinFsp backend, must
@@ -87,6 +109,7 @@ jobs:
         shell: pwsh
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+          CODETAGS_BDD_CAPABILITIES: lspmux
         run: ci/run-deelevated.ps1 just check
 
       # The fallback with WinFsp really absent; the BDD scenario forces it
@@ -540,6 +563,27 @@ jobs:
         run: |
           npm install -g --no-fund --no-audit @anthropic-ai/claude-code
           claude --version
+
+      # The shim rule runs rust-analyzer through lspmux (M3).
+      - name: lspmux revision from providers.toml
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        id: lspmux
+        shell: bash
+        run: echo "rev=$(sed -n '/^\[lspmux\]/,/^\[/s/^rev *= *"\(.*\)".*/\1/p' providers.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        with:
+          path: |
+            .codetags/local/bin
+            .codetags/local/.crates.toml
+            .codetags/local/.crates2.json
+          key: lspmux-${{ runner.os }}-${{ runner.arch }}-${{ steps.lspmux.outputs.rev }}
+
+      - name: just setup-lspmux
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        shell: bash
+        run: just setup-lspmux
 
       - name: Assert unprivileged
         if: env.HAS_ANTHROPIC_API_KEY == 'true'
