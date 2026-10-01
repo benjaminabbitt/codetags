@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 48dd952ef0187c3527d2cee6838e2f103ec09f6e413fcf1a6ab7777fd87ae072 # shrinks to scheme = "a", manager = "", pkg = " ", version = "", descriptors = [Descriptor { name: "a", suffix: Namespace, disambiguator: None }]

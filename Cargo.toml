@@ -39,6 +39,7 @@ regex = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 fuser = "0.18"
+proptest = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
