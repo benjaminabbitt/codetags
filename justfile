@@ -23,8 +23,13 @@ setup-providers:
 # --- the green light -----------------------------------------------------
 
 # Universal check: must exit 0 on Linux, macOS, and Windows (PLAN.md §0.6).
-check: fmt-check lint license-check test bdd tags-check
+check: override-check fmt-check lint license-check test bdd tags-check
     @echo "check: green"
+
+# Fails while .cargo/config.toml holds a local override (`just dev-tagma PATH`
+# or a hand-written [patch]), so one cannot be committed.
+override-check:
+    @if grep -q -e '^# >>> dev-tagma' -e '^\[patch' .cargo/config.toml; then echo "override-check: .cargo/config.toml holds a local override; remove it with: just dev-tagma"; exit 1; else echo "override-check: no local overrides"; fi
 
 fmt:
     cargo fmt --all
@@ -45,7 +50,7 @@ test:
 # Gherkin features (PLAN.md §0.2) that need no mount, provider, or privilege.
 # Jobs with more capabilities set CODETAGS_BDD_CAPABILITIES (codetags-bdd).
 # Every cargo invocation here selects --workspace: a narrower selection unifies
-# features differently and recompiles the bundled DuckDB (10+ minutes).
+# features differently and rebuilds dependencies.
 bdd:
     cargo test --workspace --test bdd
 
@@ -91,7 +96,9 @@ doctor:
 
 # --- development ---------------------------------------------------------
 
-# Point tagma-core at a local checkout (e.g. ../kvtag), via an ignored
-# .cargo/config.toml. With no PATH, remove the override.
+# Point tagma-core at a local checkout (e.g. ../kvtag) with a marked [patch]
+# block in the committed .cargo/config.toml. With no PATH, remove the block.
+# `override-check` fails while the block is present.
 dev-tagma PATH="":
-    @if [ -z "{{PATH}}" ]; then rm -f .cargo/config.toml; echo "dev-tagma: using the pinned git revision"; else mkdir -p .cargo && printf '[patch."https://github.com/benjaminabbitt/tagma"]\ntagma-core = { path = "%s/crates/tagma-core" }\n' "{{PATH}}" > .cargo/config.toml && echo "dev-tagma: using {{PATH}}"; fi
+    @sed '/^# >>> dev-tagma/,/^# <<< dev-tagma/d' .cargo/config.toml > .cargo/config.toml.new && mv .cargo/config.toml.new .cargo/config.toml
+    @if [ -z "{{PATH}}" ]; then echo "dev-tagma: using the pinned git revision"; else printf '# >>> dev-tagma: local override; remove with "just dev-tagma" before committing\n[patch."https://github.com/benjaminabbitt/tagma"]\ntagma-core = { path = "%s/crates/tagma-core" }\n# <<< dev-tagma\n' "{{PATH}}" >> .cargo/config.toml && echo "dev-tagma: using {{PATH}}"; fi

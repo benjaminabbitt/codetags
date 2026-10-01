@@ -7,3 +7,7 @@
 # target/duckdb-download and copies it into target/<profile>/deps. Without
 # this, a build without `bundled-duckdb` probes the system for a libduckdb.
 DUCKDB_DOWNLOAD_LIB = "1"
+
+# `just dev-tagma PATH` appends a marked [patch] block below, and
+# `just dev-tagma` removes it. `just check` fails while it is present, so a
+# local override cannot be committed.

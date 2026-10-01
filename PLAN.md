@@ -420,7 +420,7 @@ codetags/
 | Dependency | Pin | Notes |
 |---|---|---|
 | Rust | `rust-toolchain.toml` 1.96.x, edition 2024 | 1.96.1 on the dev host |
-| tagma-core | git `benjaminabbitt/tagma` at the full SHA of `b1ae808`, the first BSD-3-Clause commit | Local override: `just dev-tagma PATH` writes an ignored `.cargo/config.toml` `[patch]`. |
+| tagma-core | git `benjaminabbitt/tagma` at the full SHA of `b1ae808`, the first BSD-3-Clause commit | Local override: `just dev-tagma PATH` adds a marked `[patch]` block to the committed `.cargo/config.toml`, and `just dev-tagma` removes it. `just override-check`, part of `check`, fails while it is present. |
 | duckdb | `~1.10506` (DuckDB 1.5.6), default features (V29) | **Development and CI** link the prebuilt dynamic library (R1, V29):<br>• The committed `.cargo/config.toml` sets `DUCKDB_DOWNLOAD_LIB=1`, so `just`, plain cargo and rust-analyzer all use it.<br>• libduckdb-sys downloads the release library into `target/duckdb-download/` and copies it into `target/<profile>/deps`. Cargo puts that directory on the runtime library path for tests and `cargo run`.<br>• A binary that links DuckDB, run outside cargo, does not find the library: there is no rpath.<br>**Release builds** enable `codetags-model`'s `bundled-duckdb` feature (`duckdb/bundled`). It is a static build, so there is no runtime DLL, but it compiles DuckDB's C++ for about 12 minutes. On Windows it needs a short `CARGO_TARGET_DIR` and `+crt-static` (V8). |
 | cucumber | 0.23 | Latest as of 2026-09-30; tagma pins 0.21.1 |
 | fuser | 0.18 | V11 |
@@ -670,7 +670,8 @@ This no longer gates anything (D2).
 |---|---|
 | `setup` | Rust toolchain components; per-OS notes |
 | `setup-providers` | Installs the pinned providers from `providers.toml` |
-| `check` | `fmt-check`, `lint`, `license-check`, `test`, `bdd`, `tags-check` |
+| `check` | `override-check`, `fmt-check`, `lint`, `license-check`, `test`, `bdd`, `tags-check` |
+| `override-check` | Fails while `.cargo/config.toml` holds a local override (a `dev-tagma` block or any `[patch]`) |
 | `license-check` | `cargo deny check licenses bans` (rule 12) |
 | `fmt` / `fmt-check` / `lint` / `test` | cargo equivalents; clippy with `-D warnings` |
 | `bdd` | Features that need no mount, provider, or privilege |
@@ -683,7 +684,7 @@ This no longer gates anything (D2).
 | `eval CONDITION` | Evaluation condition A, B or C |
 | `doctor` | Environment report: mount backend, helper, providers |
 | `dogfood` | Index this repo and refresh its views (M1) |
-| `dev-tagma PATH` | Local tagma override (ignored config) |
+| `dev-tagma PATH` | Local tagma override (a marked block in `.cargo/config.toml`; no PATH removes it) |
 
 ## Appendix B — view tree and tag-write rules
 
