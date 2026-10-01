@@ -582,7 +582,7 @@ This no longer gates anything (D2).
 | ID | Tag | Task |
 |---|---|---|
 | P5.1 | CORE | Linux FUSE over `ViewFs`: TTLs near zero, plus `Notifier` invalidation on a generation swap or a tag write. |
-| P5.2 | CORE | macOS NFSv3 backend: a table mapping (generation, node) to handles of at most 64 bytes; ESTALE after GC; `actimeo=0`; directory mtime bumped per generation. |
+| P5.2 | CORE | macOS NFSv3 backend on `nfs3_server` (S2, V42): a table mapping (generation, node) to handles of at most 56 bytes; ESTALE after GC; `actimeo=0`. **Bump the directory mtime on every change.** macOS caches failed lookups until a directory's mtime changes, even under `actimeo=0` (V44); `nonegnamecache` is the alternative. |
 | P5.3 | CORE | Windows WinFsp backend on `winfsp` (winfsp-rs):<br>• Delay-load the DLL; if `winfsp_init()` fails, fall back to Tier 0 (D3).<br>• Set case-sensitive search and case-preserved names.<br>• Use short info timeouts, plus `Notifier` invalidation on a generation swap or a tag write.<br>• Show the WinFsp attribution notice and repo link in `codetags --version`, `codetags doctor` and the README (V14).<br>• Windows release archives carry the GPL-3.0 licence text and a NOTICE (D9). |
 | P5.4 | CORE | Run every `features/views` scenario against each live backend, parameterized by backend. Content must equal the in-memory rendering byte for byte. |
 | P5.5 | CORE | Evaluation condition C. |
@@ -643,7 +643,7 @@ This no longer gates anything (D2).
 | O-2 | A local-only personal tag file. | shared file only |
 | O-3 | Add `remove_item` to tagma (now on the tagging hot path). | clone-and-apply per write; revisit if the P6.3 benchmark fails |
 | O-4 | Upstream the path profile into tagma's SPEC. | **obsolete (D15):** there is no path profile |
-| O-5 | macOS NFS loopback is reachable by other local users. | accept, with the §2.8 mitigations |
+| O-5 | macOS NFS loopback is reachable by other local users. S2 (V43–V44) found the random export path is **not** secret: `mount` and `nfsstat -m` show it and the port to any local user, and both server crates hand out the export list. So the only real mitigations are read-only exports and single-user machines. | accept on single-user machines; document the exposure |
 | O-6 | Untagging by unlinking an entry in a query directory. | **superseded by D11:** `rm` untags, guarded by §2.11 |
 | O-7 | Should file items in `q/` show the `.skel` view or the raw source? | **superseded by D11:** raw source under `@files/`, skeletons under `@skel/` |
 | O-8 | Targets: tag write → visible; source edit → view fresh; a cap on result listings. | 250 ms p95 on 1M items (proposed); measure freshness first; no cap |
