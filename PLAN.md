@@ -74,10 +74,14 @@ of tagma's `PLAN.md`:
 | D16 | **Agent sessions never own documents** (2026-10-01). For an agent session such as Claude Code, the shim drops `textDocument/didOpen`, `didChange` and `didClose`, so the shared server reads agent-visible files from disk, and the watcher keeps it current through `didChangeWatchedFiles`. Only editor sessions (VS Code) send buffer contents. This answers lspmux question (a), and sidesteps Claude Code's reported stale-`didChange` bug. | brief §4.2 "Document ownership": agent sessions should not open documents |
 | D17 | **lspmux listens on a Unix socket in a 0700 directory on Linux and macOS**, and on loopback TCP on Windows (2026-10-01). This is a config choice; lspmux is unchanged (D14). It closes the "any local user can make the daemon run programs" hole (V36, O-20) everywhere except Windows. | refines D14 and C1 |
 | D18 | **The Claude Code integration is project-scoped:** a plugin in this repo, enabled only here; the official `rust-analyzer-lsp` plugin is disabled for this project and nowhere else. **Stage 0 comes first:** record Claude Code's real LSP traffic for one session, before the shim's design depends on the reported client bugs. | M3 |
+| D19 | **lspmux is pinned at git rev `18861f9`**, installed with `cargo install --locked --git https://codeberg.org/p2502/lspmux --rev 18861f9` (2026-10-01). crates.io 0.3.0 breaks pyright and typescript-language-server (V35). The pin is bumped deliberately. | answers lspmux question (e) |
+| D20 | **`codetags lsp setup` is the only writer of `~/.config/lspmux/config.toml`** (2026-10-01). lspmux can't be pointed elsewhere. The command writes the D17 socket, a `pass_environment` allowlist and the instance timeout; it backs up any existing file, shows a diff, and never runs implicitly. `codetags doctor` reports drift. | answers lspmux question (d) |
+| D21 | **The shim starts `lspmux server` on demand** when its socket is missing, the same way on every OS; nothing is installed as a service (2026-10-01). | §3.4 of `docs/proxy-zero-change.md` |
+| D22 | **VS Code joins in stage 2,** alongside Claude Code (2026-10-01). This repo's `.vscode/settings.json` points `rust-analyzer.server.path` at the shim, and a scripted VS Code-style session is added to the tests. | M3 |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
-The planning agent derived these from D1–D18 and from research. Each is a default the human may overturn.
+The planning agent derived these from D1–D22 and from research. Each is a default the human may overturn.
 
 - **C1. Transport.** *Superseded by D14:* upstream lspmux's transport, loopback TCP by default. Cross-machine use goes through SSH TCP port forwarding (`ssh -L`), which works between any of the three OSes.
 - **C2. Watcher.**
