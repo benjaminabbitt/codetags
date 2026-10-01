@@ -574,6 +574,8 @@ This no longer gates anything (D2).
 
 **Done when** the brief's P3 condition holds on all three OSes.
 
+For rust-analyzer, freshness after external changes needs no watcher client (V126, note under P4).
+
 ## 12. P4 — watcher, coalescer, readiness gate, reindex loop
 
 | ID | Tag | Task |
@@ -585,6 +587,8 @@ This no longer gates anything (D2).
 | P4.6 | SPEC | `features/watch/notify.feature`: the `fs:` facts, filter semantics, narrowing-only, and the per-server defaults. Human review. |
 | P4.7 | CORE | Change notifier (§2.12): per-batch event index, filters from config, built-in defaults for rust-analyzer, gopls, pyright and the TS server. |
 | P4.5 | CORE | Reindex loop in `codetagsd`: batch → affected providers → new generation → views swap. A change to the tags file reloads only the overlay. |
+
+**Note (V126, M3).** Stage 3, our watcher as an extra lspmux client sending `didChangeWatchedFiles` (P4.3, P4.7, P3.8), is needed for servers that rely on the client to watch files, such as gopls. It is not needed for rust-analyzer's freshness. The shim takes `didChangeWatchedFiles` out of `initialize`, so rust-analyzer watches the files itself (V122). Through the shim, changes made outside Claude Code reached it with no client notification: `sed`, `git checkout`, and new files, for documents the agent had opened and for documents it had not. This was observed on Linux; macOS and Windows are not checked.
 
 **Done when:**
 
