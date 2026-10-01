@@ -20,6 +20,10 @@ setup:
 # providers.toml pins (the one in rust-toolchain.toml). Go: needs the pinned
 # Go minor version on PATH (CI: actions/setup-go), then `go install`s scip-go
 # and tools/gocallgraph into `go env GOPATH`/bin, which must be on PATH.
+# TypeScript: scip-typescript and Jelly, `npm install -g` into npm's global
+# prefix, which must be per-user (nvm, actions/setup-node, or `npm config set
+# prefix ~/.local`): providers never install or run as root (PLAN.md §0.10).
+# Needs Node 22 or later on PATH; providers.toml pins the version CI uses.
 setup-providers:
     rustup toolchain install
     rustup component add rust-analyzer --toolchain "$(sed -n '/^\[rust-analyzer\]/,/^\[/s/^toolchain *= *"\(.*\)".*/\1/p' providers.toml)"
@@ -29,6 +33,10 @@ setup-providers:
     go install -C tools/gocallgraph .
     @command -v scip-go >/dev/null && command -v gocallgraph >/dev/null || { echo "setup-providers: add $(go env GOPATH)/bin to PATH"; exit 1; }
     scip-go --version
+    @node --version || { echo "setup-providers: node is not on PATH; install Node $(sed -n '/^\[node\]/,/^\[/s/^version *= *"\(.*\)".*/\1/p' providers.toml) per-user (e.g. nvm)"; exit 1; }
+    npm install -g --no-fund --no-audit "$(sed -n '/^\[scip-typescript\]/,/^\[/s/^npm *= *"\(.*\)".*/\1/p' providers.toml)" "$(sed -n '/^\[jelly\]/,/^\[/s/^npm *= *"\(.*\)".*/\1/p' providers.toml)"
+    scip-typescript --version
+    jelly --version
     @echo "setup-providers: ready"
 
 # --- the green light -----------------------------------------------------

@@ -271,6 +271,18 @@ jobs:
           go-version: ${{ steps.go.outputs.version }}
           cache-dependency-path: tools/gocallgraph/go.sum
 
+      # Node for the npm providers (scip-typescript, Jelly), at the exact
+      # version providers.toml pins. setup-node's npm prefix is per-user, so
+      # `npm install -g` in setup-providers needs no privilege.
+      - name: Node version from providers.toml
+        id: node
+        shell: bash
+        run: echo "version=$(sed -n '/^\[node\]/,/^\[/s/^version *= *"\(.*\)".*/\1/p' providers.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+
       - name: just setup-providers
         shell: bash
         run: just setup-providers
