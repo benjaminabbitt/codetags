@@ -486,13 +486,101 @@ jobs:
           path: ${{ runner.temp }}/bdd-ran.txt
           if-no-files-found: warn
 
+  # M3 stage 0 (D16-D18): Claude Code's LSP client, observed live
+  # (features/lsp/claude-client.feature). Runs only when the repository has
+  # the ANTHROPIC_API_KEY secret (forks' pull requests never do); otherwise
+  # every step is skipped, and ci/expected-skips.txt lists the scenarios.
+  # Claude Code is installed unpinned, on purpose: the job's point is to fail
+  # when a new version's client behaves differently.
+  claude-client:
+    name: claude-client (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    env:
+      HAS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - name: Skipped without the ANTHROPIC_API_KEY secret
+        if: env.HAS_ANTHROPIC_API_KEY != 'true'
+        shell: bash
+        run: |
+          echo "::notice::claude-client skipped: the repository has no ANTHROPIC_API_KEY secret"
+
+      - uses: actions/checkout@v4
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+
+      - name: Rust toolchain from rust-toolchain.toml, with rust-analyzer
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup component add rust-analyzer
+
+      - uses: Swatinem/rust-cache@v2
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+
+      # As in the check job: rust-cache prunes the downloaded libduckdb but
+      # keeps libduckdb-sys's build-script fingerprint (V29).
+      - name: Re-fetch the prebuilt libduckdb
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        shell: bash
+        run: cargo clean -p libduckdb-sys
+
+      - uses: taiki-e/install-action@v2
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        with:
+          tool: just@1.58.0
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        shell: bash
+        run: |
+          npm install -g --no-fund --no-audit @anthropic-ai/claude-code
+          claude --version
+
+      - name: Assert unprivileged
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        shell: bash
+        run: ci/assert-unprivileged.sh
+
+      # Only this step sees the key.
+      - name: just test-claude
+        if: env.HAS_ANTHROPIC_API_KEY == 'true'
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+          CODETAGS_BDD_CLAUDE_SAVE: ${{ runner.temp }}/claude-recordings
+        run: just test-claude
+
+      # The sanitized recordings, to refresh tests/fixtures/lsp when a new
+      # Claude Code version behaves differently.
+      - name: Upload the recordings
+        if: ${{ !cancelled() && env.HAS_ANTHROPIC_API_KEY == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-recordings
+          path: ${{ runner.temp }}/claude-recordings
+          if-no-files-found: warn
+
+      - name: Upload the BDD record
+        if: ${{ !cancelled() && env.HAS_ANTHROPIC_API_KEY == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-ran-claude-client
+          path: ${{ runner.temp }}/bdd-ran.txt
+          if-no-files-found: warn
+
   # PLAN.md §0.11: every scenario must run in some job, or be listed in
   # ci/expected-skips.txt. Runs whether the BDD jobs pass or fail, so a
   # failing run still reports what went unrun. Add every job that runs BDD
   # to `needs`.
   bdd-coverage:
     name: bdd-coverage
-    needs: [check, mount-linux, mount-macos, providers, mount-windows, privileged-linux]
+    needs: [check, mount-linux, mount-macos, providers, mount-windows, privileged-linux, claude-client]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
