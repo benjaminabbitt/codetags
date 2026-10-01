@@ -19,6 +19,7 @@ tempfile.workspace = true
 cucumber.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 codetags-mount-nfs.workspace = true

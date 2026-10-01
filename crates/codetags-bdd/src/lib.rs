@@ -16,6 +16,7 @@ mod steps_index_go;
 mod steps_index_python;
 mod steps_index_ts;
 mod steps_lsp;
+mod steps_lspmux;
 mod steps_model;
 mod steps_mount;
 mod steps_names;
@@ -117,6 +118,9 @@ pub struct CodetagsWorld {
     // M3 stage 0 (codetags-lsp): state for features/lsp/claude-client*.
     /// The scenario's plan, its Claude Code session, and the analysis.
     claude: steps_claude::ClaudeState,
+    // M3 stage 1 (codetags lsp setup): state for features/lsp/setup.feature.
+    /// The isolated home and its lspmux daemons.
+    lspmux: steps_lspmux::LspmuxState,
 }
 
 impl CodetagsWorld {

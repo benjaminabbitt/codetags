@@ -1,6 +1,6 @@
 [package]
 name = "codetags-lsp"
-description = "LSP shim for codetags: the stage-0 session recorder and analyzer (M3), and later the lspmux shim (P3.4)."
+description = "LSP shim for codetags: shares language servers through upstream lspmux (M3), plus the stage-0 session recorder and analyzer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,11 +12,14 @@ publish.workspace = true
 # cargo, where a DuckDB-linked binary does not find its library (PLAN.md §4).
 [dependencies]
 clap.workspace = true
+directories.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# Re-raises the server's terminating signal, so the editor sees it (MIT).
-nix = { workspace = true, features = ["signal"] }
+# Re-raises the server's terminating signal, so the editor sees it, and
+# reads this user's uid for the socket directory's owner check (MIT).
+nix = { workspace = true, features = ["signal", "user"] }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 clap.workspace = true
 codetags-ingest.workspace = true
+codetags-lsp.workspace = true
 codetags-mount-fuse.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

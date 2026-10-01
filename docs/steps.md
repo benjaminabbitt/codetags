@@ -509,6 +509,46 @@ Then the recording has no end-of-stream or exit record
       # the recorder was killed before either side closed its stream
 ```
 
+## lspmux setup and doctor (M3 stages 1 and 2)
+
+`codetags lsp setup` and the proxy checks of `codetags doctor`
+(`features/lsp/setup.feature`, PLAN.md D20). Every scenario has its own home:
+`HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, `USERPROFILE`,
+`APPDATA` and `LOCALAPPDATA` point into the scratch directory, and on Linux
+and macOS `XDG_RUNTIME_DIR` into a short private temporary directory (a
+socket path is at most 103 bytes on macOS), for every process the scenario
+starts. `CODETAGS_LSPMUX` names the lspmux binary when one is found
+(`$CODETAGS_LSPMUX`, this checkout's `.codetags/local/bin/lspmux`, or PATH).
+lspmux's config file is the one `ProjectDirs("", "", "lspmux")` names in that
+home (V116).
+
+```gherkin
+Given an isolated home for lspmux
+      # fails if `codetags lsp setup`, unconfirmed, names a config file
+      # outside the home: the scenario would touch the real one
+Given codetags lsp setup has run                 # `codetags lsp setup --yes`; must exit 0
+Given lspmux is set up in an isolated home
+      # both of the above; on Windows with --listen 127.0.0.1:<a free port>
+When codetags is run with {string} and the answer {string}
+      # like `codetags is run with`, with the answer and a newline on stdin
+Given lspmux's config file holds {string}        # the text plus a newline
+Given lspmux's config file has {string} replaced by {string}
+Then lspmux's config sets {string} to {string}   # key; the value as TOML, compared parsed
+Then lspmux's config listens on a socket in a private directory
+      # listen = connect = <XDG_RUNTIME_DIR>/codetags/lspmux.sock, in a 0700 directory
+Then a backup of lspmux's config holds {string}  # exactly one config.toml.bak-*, trailing newline ignored
+Then no backup of lspmux's config exists
+Then lspmux's config file still holds {string}   # trailing newline ignored
+Then lspmux's config file does not exist
+When lspmux prints its effective config          # `lspmux config` in the home; captures its output
+Then lspmux's effective config listens where codetags lsp setup wrote
+      # the printed config's `listen` is the file's
+Given no lspmux daemon is answering
+Then no lspmux daemon is answering
+Then an lspmux daemon is answering               # the home's socket (Windows: its port) accepts
+Then the lspmux daemon was started {int} time(s) # start lines in the daemon's log
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,
@@ -517,7 +557,7 @@ the rule, and the scenario.
 | Tag | Scenario runs only… |
 |---|---|
 | `@linux`, `@macos`, `@windows` | on the named OSes; with no platform tag, on every OS |
-| `@mount`, `@winfsp`, `@providers`, `@privileged`, `@slow`, `@claude` | when the job lists that capability in `CODETAGS_BDD_CAPABILITIES` (comma-separated) |
+| `@mount`, `@winfsp`, `@providers`, `@privileged`, `@slow`, `@claude`, `@lspmux` | when the job lists that capability in `CODETAGS_BDD_CAPABILITIES` (comma-separated); `@lspmux` needs the pinned lspmux (`just setup-lspmux`) |
 | `@serial` | (no gate) alone: cucumber runs no other scenario at the same time |
 
 Each scenario that doesn't run is reported on stderr as `bdd: not run here: …`.

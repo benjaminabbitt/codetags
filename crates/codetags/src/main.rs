@@ -2,6 +2,7 @@
 
 mod doctor;
 mod index;
+mod lsp;
 mod report;
 
 use std::path::PathBuf;
@@ -48,6 +49,28 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         write_baseline: Option<PathBuf>,
     },
+    /// The LSP proxy: language servers shared through lspmux (M3).
+    Lsp {
+        #[command(subcommand)]
+        command: LspCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LspCommand {
+    /// Write lspmux's config file: a listen address only you can reach (a
+    /// socket in a private directory; loopback TCP on Windows), the
+    /// environment allowlist that keys a server, and the idle timeout. Shows
+    /// the difference and asks first; backs up a different file.
+    Setup {
+        /// Write without asking.
+        #[arg(long)]
+        yes: bool,
+        /// Listen on this address instead: IP:PORT (loopback only) or an
+        /// absolute socket path.
+        #[arg(long, value_parser = lsp::parse_listen)]
+        listen: Option<codetags_lsp::lspmux::Address>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -67,5 +90,8 @@ fn main() -> ExitCode {
             baseline,
             write_baseline,
         }),
+        Command::Lsp {
+            command: LspCommand::Setup { yes, listen },
+        } => lsp::setup(listen, yes),
     }
 }

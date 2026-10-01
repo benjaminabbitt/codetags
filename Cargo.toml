@@ -25,6 +25,7 @@ codetags-mount-winfsp = { path = "crates/codetags-mount-winfsp" }
 codetags-watch = { path = "crates/codetags-watch" }
 codetags-ipc = { path = "crates/codetags-ipc" }
 codetags-bdd = { path = "crates/codetags-bdd" }
+codetags-lsp = { path = "crates/codetags-lsp" }
 
 # External crates. Pins and rationale: PLAN.md §4.
 # tagma is pinned by full SHA; `just dev-tagma PATH` overrides it locally.
@@ -63,6 +64,12 @@ serde_json = "1"
 # Linux system calls for the privileged helper (P4.4): fanotify, SO_PEERCRED,
 # and dropping privileges. MIT.
 nix = { version = "0.31", default-features = false }
+# lspmux's config path (M3, V116): the exact version lspmux 18861f9 uses, so
+# `codetags lsp setup` writes the file lspmux reads. MIT OR Apache-2.0.
+directories = "=4.0.1"
+# lspmux's config, Cargo manifests (root discovery) and wrapper settings.
+# MIT OR Apache-2.0.
+toml = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

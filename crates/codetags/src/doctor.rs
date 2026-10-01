@@ -2,7 +2,8 @@
 //!
 //! Exit status 1 means something is misconfigured that the user can fix.
 //! A missing optional capability (e.g. no FUSE) is reported, not an error:
-//! static views and the CLI work everywhere (D3).
+//! static views and the CLI work everywhere (D3). The LSP proxy's checks
+//! (lspmux's revision and config; M3) come from `codetags_lsp::doctor`.
 
 use std::process::ExitCode;
 
@@ -18,6 +19,10 @@ pub fn run() -> ExitCode {
         needs_fixing: false,
     };
     mount_backend(&mut report);
+    for finding in codetags_lsp::doctor::report() {
+        report.needs_fixing |= finding.needs_fixing;
+        report.lines.push(finding.line);
+    }
     for line in &report.lines {
         println!("{line}");
     }
