@@ -446,6 +446,7 @@ dependencies = [
  "codetags-mount-fuse",
  "codetags-mount-nfs",
  "codetags-names",
+ "codetags-watch",
  "cucumber",
  "regex",
  "tagma-core",

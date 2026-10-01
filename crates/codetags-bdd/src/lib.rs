@@ -16,6 +16,7 @@ mod steps_mount;
 mod steps_names;
 mod steps_query;
 mod steps_store;
+mod steps_watch;
 mod tags;
 
 use std::ffi::OsString;
@@ -92,6 +93,9 @@ pub struct CodetagsWorld {
     // P1.4 (codetags-ingest): state for features/index/.
     /// The last SCIP provider run.
     index: steps_index::IndexState,
+    // P4.1, P4.2 (codetags-watch): state for features/watch/.
+    /// The coalescer, the watcher, and its project directory.
+    watch: steps_watch::WatchState,
 }
 
 impl CodetagsWorld {

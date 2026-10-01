@@ -173,6 +173,30 @@ Then the document {string} has occurrences of local symbols  # `local N`
 Then filtering local symbols keeps every other occurrence in {string}
 ```
 
+## Watcher and coalescer
+
+A *changes* `{string}` is a whitespace-separated list of `<kind>:<path>`
+tokens, where `<kind>` is `created`, `changed` or `deleted` and `<path>` is
+project-relative with `/` separators; it is compared as a set, and `""` means
+none. `{word}` in the coalescer steps is one of those kinds.
+
+The coalescer steps drive the coalescer directly with a fake clock; `at {int}
+ms` is milliseconds after the scenario's start, and must not go backwards.
+
+```gherkin
+Given a coalescer with a quiet window of {int} ms and a maximum wait of {int} ms
+      # the default index-lock cap
+Given a coalescer with a quiet window of {int} ms, a maximum wait of {int} ms and an index-lock cap of {int} ms
+When at {int} ms the watcher sees {string} {word}
+When at {int} ms git takes its index lock
+When at {int} ms git releases its index lock
+When at {int} ms a rescan finds {string}       # changes; replaces the pending events
+Then at {int} ms the coalescer flushes exactly {string}   # changes
+      # polls the coalescer; fails if it flushes nothing (unless "") or anything else
+Then at {int} ms the coalescer flushes nothing
+Then the flushed batch is marked as a rescan
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

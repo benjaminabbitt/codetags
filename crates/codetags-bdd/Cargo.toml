@@ -14,6 +14,7 @@ tagma-core.workspace = true
 codetags-model.workspace = true
 codetags-names.workspace = true
 codetags-ingest.workspace = true
+codetags-watch.workspace = true
 tempfile.workspace = true
 cucumber.workspace = true
 regex.workspace = true
