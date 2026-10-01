@@ -732,13 +732,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real");
         std::fs::create_dir(&real).unwrap();
-        let link = dir.path().join("link");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let root = {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            link
+        };
+        // A link needs a privilege on Windows: check the plain form only.
         #[cfg(not(unix))]
-        let link = real.clone();
+        let root = real.clone();
         let expected = without_verbatim_prefix(std::fs::canonicalize(&real).unwrap());
-        assert_eq!(project_root(&link).unwrap(), expected);
+        assert_eq!(project_root(&root).unwrap(), expected);
         // A root that does not exist stays as given, made absolute, for
         // scip-python to report.
         let missing = dir.path().join("missing");
