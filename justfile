@@ -16,9 +16,13 @@ setup:
     @echo "setup: ready"
 
 # Pinned SCIP providers from providers.toml (P1).
+# Idempotent. Rust: the rust-analyzer component of the toolchain that
+# providers.toml pins (the one in rust-toolchain.toml).
 setup-providers:
-    @echo "setup-providers: not built yet (P1)"
-    @exit 1
+    rustup toolchain install
+    rustup component add rust-analyzer --toolchain "$(sed -n '/^\[rust-analyzer\]/,/^\[/s/^toolchain *= *"\(.*\)".*/\1/p' providers.toml)"
+    rust-analyzer --version
+    @echo "setup-providers: ready"
 
 # --- the green light -----------------------------------------------------
 
@@ -67,10 +71,10 @@ tags-check:
 test-mount:
     CODETAGS_BDD_CAPABILITIES=mount cargo test --workspace --test bdd
 
-# Index features against the fixtures (P1).
+# Index features against the fixtures (P1): the bdd suite with the
+# `providers` capability enabled. Run `setup-providers` first.
 test-providers:
-    @echo "test-providers: not built yet (P1)"
-    @exit 1
+    CODETAGS_BDD_CAPABILITIES=providers cargo test --workspace --test bdd
 
 # Edge-count regression against tests/baselines (P1.8).
 baseline-check:

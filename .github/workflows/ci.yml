@@ -203,13 +203,67 @@ jobs:
           path: ${{ runner.temp }}/bdd-ran.txt
           if-no-files-found: warn
 
+  # PLAN.md §5: the pinned SCIP providers against tests/fixtures (P1.4 on).
+  # `just baseline-check` joins this job with P1.8.
+  providers:
+    name: providers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # rust-cache prunes files it does not recognise under target/ before
+      # saving, including the downloaded libduckdb and its copy in deps/, but
+      # keeps libduckdb-sys's build-script fingerprint. On a warm cache the
+      # build script would not run again, and linking fails with "unable to
+      # find library -lduckdb" (V29). Cleaning the package makes it download
+      # the library again (a few seconds).
+      - name: Re-fetch the prebuilt libduckdb
+        shell: bash
+        run: cargo clean -p libduckdb-sys
+
+      - uses: extractions/setup-just@v2
+
+      - name: just setup-providers
+        shell: bash
+        run: just setup-providers
+
+      # Providers execute project code (build scripts, proc macros), so they
+      # never run as root or admin (PLAN.md §0.10).
+      - name: Assert unprivileged
+        shell: bash
+        run: ci/assert-unprivileged.sh
+
+      - name: just test-providers
+        shell: bash
+        env:
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+        run: just test-providers
+
+      - name: Upload the BDD record
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-ran-providers-${{ matrix.os }}
+          path: ${{ runner.temp }}/bdd-ran.txt
+          if-no-files-found: warn
+
   # PLAN.md §0.11: every scenario must run in some job, or be listed in
   # ci/expected-skips.txt. Runs whether the BDD jobs pass or fail, so a
   # failing run still reports what went unrun. Add every job that runs BDD
   # to `needs`.
   bdd-coverage:
     name: bdd-coverage
-    needs: [check, mount-linux, mount-macos]
+    needs: [check, mount-linux, mount-macos, providers]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
