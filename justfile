@@ -148,6 +148,18 @@ doctor:
     cargo build --workspace --bins --quiet
     bin="${CARGO_TARGET_DIR:-target}/debug"; if command -v cygpath >/dev/null 2>&1; then bin="$(cygpath -ua "$bin")"; else case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac; fi; PATH="$bin/deps:$PATH" "$bin/codetags" doctor
 
+# Indexes this repo with `codetags index --root .` (M1, D10) and prints the
+# summary. Fails if the index fails (any provider failure) or reports any
+# canonical-name collision. Builds and finds libduckdb as `doctor` does.
+# Views are not refreshed yet: the materializer is P2.5.
+dogfood:
+    cargo build --workspace --bins --quiet
+    bin="${CARGO_TARGET_DIR:-target}/debug"; if command -v cygpath >/dev/null 2>&1; then bin="$(cygpath -ua "$bin")"; else case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac; fi; \
+    out="$(PATH="$bin/deps:$PATH" "$bin/codetags" index --root .)"; status=$?; printf '%s\n' "$out"; \
+    if [ "$status" -ne 0 ]; then echo "dogfood: codetags index failed (exit $status)"; exit "$status"; fi; \
+    if printf '%s\n' "$out" | grep -q 'canonical-name collisions: [1-9]'; then echo "dogfood: canonical-name collisions (listed above)"; exit 1; fi; \
+    echo "dogfood: indexed, no canonical-name collisions"
+
 # --- development ---------------------------------------------------------
 
 # Point tagma-core at a local checkout (e.g. ../kvtag) with a marked [patch]

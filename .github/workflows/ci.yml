@@ -333,6 +333,13 @@ jobs:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
         run: ci/run-deelevated.ps1 just test-providers
 
+      # Dogfooding (D10, M1): index this repo. Fails on any provider failure
+      # or canonical-name collision (P1.3c).
+      - name: just dogfood
+        if: runner.os == 'Linux'
+        shell: bash
+        run: just dogfood
+
       - name: Upload the BDD record
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
