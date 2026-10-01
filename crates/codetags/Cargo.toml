@@ -9,6 +9,18 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+clap.workspace = true
+
+[dev-dependencies]
+codetags-bdd.workspace = true
+futures.workspace = true
+
+# The BDD runner: `just bdd`. test = false keeps it out of plain `cargo test`
+# (which `just test` runs), so the features run exactly once in `just check`.
+[[test]]
+name = "bdd"
+harness = false
+test = false
 
 [lints]
 workspace = true

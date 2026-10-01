@@ -23,7 +23,7 @@ setup-providers:
 # --- the green light -----------------------------------------------------
 
 # Universal check: must exit 0 on Linux, macOS, and Windows (PLAN.md §0.6).
-check: fmt-check lint test tags-check
+check: fmt-check lint test bdd tags-check
     @echo "check: green"
 
 fmt:
@@ -37,6 +37,11 @@ lint:
 
 test:
     cargo test --workspace
+
+# Gherkin features (PLAN.md §0.2) that need no mount, provider, or privilege.
+# Jobs with more capabilities set CODETAGS_BDD_CAPABILITIES (codetags-bdd).
+bdd:
+    cargo test -p codetags --test bdd
 
 # Validates this repo's .codetags/tags (P6.2). Vacuously green while no tags
 # file exists; fails once one exists until the validator is built.

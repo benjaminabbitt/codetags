@@ -32,6 +32,8 @@ tagma-core = { git = "https://github.com/benjaminabbitt/tagma", rev = "9a2b04465
 duckdb = { version = "~1.10506", features = ["bundled"] }
 cucumber = "0.23"
 futures = "0.3"
+regex = "1"
+clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 
 [workspace.lints.rust]
