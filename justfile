@@ -247,26 +247,12 @@ lsp-record-setup:
 # where clients start only executables (V118, V119), it installs wrapper
 # executables beside the sh wrappers instead. Last, `codetags lsp setup`
 # shows its change to lspmux's config and asks before writing (D20). Run
-# `setup-lspmux` first.
+# `setup-lspmux` first. The work is tools/lsp/lsp-setup.sh, which the wiring
+# scenarios (features/lsp/wiring.feature) run in a scratch checkout.
 lsp-setup:
     @[ -x .codetags/local/bin/lspmux ] || { echo "lsp-setup: lspmux is not installed; run: just setup-lspmux"; exit 1; }
     cargo build --workspace --bins --quiet
-    @mkdir -p .codetags/local/bin
-    @cp "${CARGO_TARGET_DIR:-target}/debug/codetags-lsp{{ exe }}" ".codetags/local/bin/codetags-lsp{{ exe }}.new" && mv -f ".codetags/local/bin/codetags-lsp{{ exe }}.new" ".codetags/local/bin/codetags-lsp{{ exe }}"
-    @ra="$(rustup which rust-analyzer)" || { echo "lsp-setup: no rust-analyzer for this toolchain; add it with: rustup component add rust-analyzer"; exit 1; }; \
-    printf '%s\n' "$ra" > .codetags/local/rust-analyzer.path; \
-    echo "lsp-setup: shim .codetags/local/bin/codetags-lsp, real server $ra ($("$ra" --version))"; \
-    if [ "{{ os() }}" = windows ]; then \
-        lspmux="$(cygpath -w "$PWD/.codetags/local/bin/lspmux.exe")"; \
-        .codetags/local/bin/codetags-lsp.exe install-wrapper --role agent --server "$ra" --lspmux "$lspmux" tools/claude-plugins/codetags-lsp/scripts/rust-analyzer && \
-        .codetags/local/bin/codetags-lsp.exe install-wrapper --role editor --server "$ra" --lspmux "$lspmux" tools/vscode/rust-analyzer || exit 1; \
-    fi
-    bin="${CARGO_TARGET_DIR:-target}/debug"; if command -v cygpath >/dev/null 2>&1; then bin="$(cygpath -ua "$bin")"; else case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac; fi; PATH="$bin/deps:$PATH" "$bin/codetags" lsp setup
-    @echo ""
-    @echo "Next (docs/lsp-shim.md has the details):"
-    @echo "  1. Claude Code: restart it in this checkout; /plugin lists codetags-lsp@codetags-local, enabled."
-    @echo "  2. VS Code: reload the window; .vscode/settings.json points rust-analyzer.server.path at tools/vscode/rust-analyzer."
-    @echo "  3. Check: codetags doctor (just doctor), and .codetags/local/bin/lspmux status"
+    sh tools/lsp/lsp-setup.sh "${CARGO_TARGET_DIR:-target}/debug/codetags-lsp{{ exe }}" "${CARGO_TARGET_DIR:-target}/debug/codetags{{ exe }}"
 
 # --- development ---------------------------------------------------------
 
