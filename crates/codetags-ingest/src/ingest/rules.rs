@@ -4,7 +4,7 @@
 //! The provider's `SymbolInformation.kind` is used when the index holds one
 //! (symbols defined in the project); otherwise the descriptors decide.
 
-use codetags_names::canonical::{CanonicalError, canonical_name};
+use codetags_names::canonical::{self, CanonicalError, Namespace, ValueKind, canonical_name};
 use codetags_names::scip::{Descriptor, GlobalSymbol, Suffix, Symbol};
 
 use crate::provider::scip::SymbolKind;
@@ -142,6 +142,29 @@ pub fn is_callable(symbol: &GlobalSymbol, info: Option<SymbolKind>) -> bool {
     }
 }
 
+/// The symbol's namespace for the canonical-name policy
+/// (`codetags_names::canonical::CanonicalNames`): by the provider's kind
+/// when known, which tells a const from a static, and by the descriptors
+/// otherwise.
+pub fn namespace(symbol: &GlobalSymbol, info: Option<SymbolKind>) -> Namespace {
+    let Some(kind) = info else {
+        return canonical::namespace(symbol);
+    };
+    if CALLABLE_KINDS.contains(&kind) && kind != SymbolKind::Macro {
+        return Namespace::Value(ValueKind::Fn);
+    }
+    match kind {
+        SymbolKind::Constant => Namespace::Value(ValueKind::Const),
+        SymbolKind::StaticVariable
+        | SymbolKind::StaticField
+        | SymbolKind::StaticDataMember
+        | SymbolKind::StaticProperty => Namespace::Value(ValueKind::Static),
+        SymbolKind::Field => Namespace::Value(ValueKind::Field),
+        SymbolKind::Macro => Namespace::Other,
+        _ => canonical::namespace(symbol),
+    }
+}
+
 /// Whether the symbol is a macro.
 pub fn is_macro(symbol: &GlobalSymbol, info: Option<SymbolKind>) -> bool {
     info == Some(SymbolKind::Macro) || last(symbol).is_some_and(|d| d.suffix == Suffix::Macro)
@@ -270,6 +293,46 @@ mod tests {
             Some(SymbolKind::Method)
         ));
         assert!(!is_callable(&global("x/f()."), Some(SymbolKind::Struct)));
+    }
+
+    #[test]
+    fn namespaces_come_from_the_provider_kind_or_the_descriptors() {
+        use codetags_names::canonical::{Namespace, ValueKind};
+        let cases = [
+            (
+                "a/LIMIT.",
+                Some(SymbolKind::Constant),
+                Namespace::Value(ValueKind::Const),
+            ),
+            (
+                "a/COUNT.",
+                Some(SymbolKind::StaticVariable),
+                Namespace::Value(ValueKind::Static),
+            ),
+            (
+                "a/S#f.",
+                Some(SymbolKind::Field),
+                Namespace::Value(ValueKind::Field),
+            ),
+            (
+                "a/f().",
+                Some(SymbolKind::Function),
+                Namespace::Value(ValueKind::Fn),
+            ),
+            ("a/", Some(SymbolKind::Module), Namespace::Type),
+            ("a/S#", Some(SymbolKind::Struct), Namespace::Type),
+            ("a/m!", Some(SymbolKind::Macro), Namespace::Other),
+            // No kind: the descriptors decide.
+            ("a/COUNT.", None, Namespace::Value(ValueKind::Const)),
+            ("a/f().", None, Namespace::Value(ValueKind::Fn)),
+        ];
+        for (descriptors, kind, expected) in cases {
+            assert_eq!(
+                namespace(&global(descriptors), kind),
+                expected,
+                "{descriptors}"
+            );
+        }
     }
 
     #[test]

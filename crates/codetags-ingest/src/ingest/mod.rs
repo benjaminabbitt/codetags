@@ -21,9 +21,13 @@
 //!   `impl#[Tree]` (V97), which would read as the type's name. It gets no
 //!   `symbol` row and is never a caller, like a module. Its methods keep
 //!   `Type.method` and `Type.Trait.method`.
-//! - **A field named like a method** (a getter) is named `<name>+field`,
-//!   only when it collides (P1.3c; a default pending human review; see
-//!   `codetags_names::canonical::CanonicalNames`).
+//! - **Rust's type and value namespaces** (P1.3c; a default pending human
+//!   review; see `codetags_names::canonical::CanonicalNames`). Only on a
+//!   collision: a value named like a type gets its kind's suffix (the
+//!   function `checker()` beside the module `checker/` is `checker+fn`),
+//!   and a field named like its getter is `<name>+field`. The kind is the
+//!   provider's (`Constant` is `+const`, `StaticVariable` is `+static`),
+//!   or the descriptors'.
 //! - **Locals.** `local N` symbols, and parameters, are the discarded local
 //!   scope (brief §4.4): their occurrences are dropped and counted. A call
 //!   through a closure or a function pointer references a local, so it is

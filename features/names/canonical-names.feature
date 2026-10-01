@@ -136,6 +136,41 @@ Feature: Canonical symbol names are dotted and keep their real characters
       | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().        | demo.spike.Server.stop              |
     And there are no collisions
 
+  # Rust keeps types (modules, structs, enums, traits) and values (functions,
+  # consts, statics, fields) in separate namespaces. On a collision between
+  # the two, the type keeps the plain name and each value gets its kind:
+  # +fn, +field, +const or +static. Without a provider kind, a term outside
+  # a type reads as a const.
+  Scenario: A value that collides with a type gets its kind suffix
+    Given these SCIP symbols:
+      | symbol                                                   |
+      | rust-analyzer cargo codetags-privhelper 0.1.0 checker/   |
+      | rust-analyzer cargo codetags-privhelper 0.1.0 checker(). |
+      | rust-analyzer cargo demo 0.1.0 totals/                   |
+      | rust-analyzer cargo demo 0.1.0 totals().                 |
+      | rust-analyzer cargo demo 0.1.0 totals.                   |
+    When their canonical names are assigned
+    Then the assigned names are:
+      | symbol                                                   | name                            |
+      | rust-analyzer cargo codetags-privhelper 0.1.0 checker/   | codetags_privhelper.checker     |
+      | rust-analyzer cargo codetags-privhelper 0.1.0 checker(). | codetags_privhelper.checker+fn  |
+      | rust-analyzer cargo demo 0.1.0 totals/                   | demo.totals                     |
+      | rust-analyzer cargo demo 0.1.0 totals().                 | demo.totals+fn                  |
+      | rust-analyzer cargo demo 0.1.0 totals.                   | demo.totals+const               |
+    And there are no collisions
+
+  Scenario: Two colliding values of one kind are still reported
+    Given these SCIP symbols:
+      | symbol                                    |
+      | rust-analyzer cargo demo 0.1.0 checker/   |
+      | rust-analyzer cargo demo 0.1.0 checker(). |
+      | rust-analyzer cargo demo 0.2.0 checker(). |
+    When their canonical names are assigned
+    Then the collisions are:
+      | name            | symbol                                    |
+      | demo.checker+fn | rust-analyzer cargo demo 0.1.0 checker(). |
+      | demo.checker+fn | rust-analyzer cargo demo 0.2.0 checker(). |
+
   Scenario: A collision the +field suffix does not resolve is still reported
     Given these SCIP symbols:
       | symbol                                                    |

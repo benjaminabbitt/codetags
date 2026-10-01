@@ -236,6 +236,11 @@ Why the other candidates are not v1 backends:
   - Generics, `$`, `#` and the like stay as they are, e.g. `billing.Charge<T>.apply`.
   - Package paths containing `/` (Go, TS) are rendered dotted (`github.com.acme.billing`). The exact SCIP symbol stays in DuckDB, so a canonical name only needs to be unique; it is never decoded.
   - **Invariant:** no canonical name contains `/` or a control character. Two symbols with the same canonical name are a reported collision, never silently merged.
+  - **Defaults, pending review** (P1.3c, from dogfooding this repo; V96–V98):
+    - **Impl blocks are containers.** rust-analyzer's symbol for an impl block itself (`impl#[Tree]`) has no canonical name, and is neither a `symbol` row nor a caller. Its methods keep `Type.method` and `Type.Trait.method`.
+    - **Value-namespace suffixes.** Rust keeps types (modules, structs, enums, traits) and values (functions, consts, statics, fields) in separate namespaces. Only on a collision: a type keeps the plain name and each value gets its kind's suffix, `+fn`, `+field`, `+const` or `+static` (the function `checker()` beside the module `checker/` is `checker+fn`). With no type in the collision, a function keeps the plain name, so a getter's field is `export_path+field`. `+` and letters cannot be mistaken for `+N`. Two values of one kind that share a name are still a reported collision.
+    - **Rust names start with the crate,** as Rust's full paths do: the SCIP package name with `-` mapped to `_` (`codetags_model.store.GenerationStore`; the crate root `crate/` is `codetags_model`), always, not only on a collision. Go, TypeScript and Python are unchanged: their descriptors already carry the import or module path.
+    - **The standard library and dependencies are prefixed with their crate** the same way (`core.iter.traits.iterator.Iterator.map`, `alloc.boxed.Box<T>.new`). A symbol's module ancestors are canonical names too (`billing.charge`); the crate root is not one, so an item at the root has no module.
 - **Values never contain `/`, by design.**
   - Modules and packages are dotted.
   - File locations are faceted as ancestor segments (`fs:dir=src`, `fs:dir=billing`, multi-valued like `module`) and as the file name (`fs:name=charge.rs`).

@@ -47,8 +47,9 @@
 //!   the type's name. [`canonical_name`] returns `None` for one
 //!   ([`is_rust_impl_block`]); its members keep `Type.method` and
 //!   `Type.Trait.method`.
-//! - **A field named like a method gets `+field`**, and only then; see
-//!   [`CanonicalNames`] (P1.3c; a default pending human review).
+//! - **A value named like a type, or a field named like a method, gets its
+//!   kind's suffix** (`+fn`, `+field`, `+const`, `+static`), and only then;
+//!   see [`CanonicalNames`] (P1.3c; a default pending human review).
 //! - **Other type parameters are canonical.** `[T]` becomes a segment `T`
 //!   (scip-typescript's `Charge#[T]` is `Charge.T`).
 //! - **Parameters and locals are not canonical symbols.** `local N`
@@ -231,74 +232,155 @@ pub struct Collision {
     pub symbols: Vec<String>,
 }
 
-/// The suffix a field gets when its canonical name collides with a
-/// non-field's, e.g. `spike.Server.export_path+field` beside the getter
-/// `spike.Server.export_path`.
+/// Rust's two namespaces, plus the kinds of symbol neither policy touches.
 ///
-/// `+` and then letters cannot be mistaken for an overload's `+N`, which is
-/// digits (a non-numeric SCIP disambiguator such as `(x)` also renders as
-/// `+x`; no indexer we know of writes one, and a clash would be reported as
-/// a collision). The result stays a tagma bare token and a legal file name
-/// (V96).
-pub const FIELD_SUFFIX: &str = "+field";
+/// Rust lets a type-namespace item (a module, struct, enum, trait or type
+/// alias) and a value-namespace item (a function, const, static, or a
+/// field as a member) share a name, so their canonical names can collide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Namespace {
+    /// A module, type, trait or type parameter: keeps the plain name.
+    Type,
+    /// A value, which gets its kind's suffix on a collision.
+    Value(ValueKind),
+    /// A macro or a meta descriptor: never suffixed.
+    Other,
+}
+
+/// What kind of value a value-namespace symbol is. The order is the
+/// precedence for the plain name when no type collides (see
+/// [`CanonicalNames`]): a function keeps it over a field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ValueKind {
+    /// A function or method: `+fn`.
+    Fn,
+    /// A constant: `+const`.
+    Const,
+    /// A static: `+static`.
+    Static,
+    /// A field, a member of a type: `+field`.
+    Field,
+}
+
+impl ValueKind {
+    /// The suffix this kind adds to a colliding name, e.g. `+field` in
+    /// `spike.Server.export_path+field`.
+    ///
+    /// `+` and then letters cannot be mistaken for an overload's `+N`, which
+    /// is digits (a non-numeric SCIP disambiguator such as `(x)` also renders
+    /// as `+x`; no indexer we know of writes one, and a clash would be
+    /// reported as a collision). The result stays a tagma bare token and a
+    /// legal file name (V96).
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Fn => "+fn",
+            Self::Const => "+const",
+            Self::Static => "+static",
+            Self::Field => "+field",
+        }
+    }
+}
+
+/// The namespace of `symbol` as its descriptors tell it: a namespace, type
+/// or type parameter is a type; a method a function; a term directly under
+/// a type a field ([`is_field`]); any other term a const, since descriptors
+/// cannot tell a const from a static (a provider's kind can, through
+/// [`CanonicalNames::insert_as`]); a macro or meta descriptor neither.
+pub fn namespace(symbol: &GlobalSymbol) -> Namespace {
+    match symbol.descriptors.last().map(|d| d.suffix) {
+        Some(Suffix::Namespace | Suffix::Type | Suffix::TypeParameter) => Namespace::Type,
+        Some(Suffix::Method) => Namespace::Value(ValueKind::Fn),
+        Some(Suffix::Term) if is_field(symbol) => Namespace::Value(ValueKind::Field),
+        Some(Suffix::Term) => Namespace::Value(ValueKind::Const),
+        Some(Suffix::Meta | Suffix::Macro | Suffix::Parameter) | None => Namespace::Other,
+    }
+}
 
 /// Canonical names assigned to a set of symbols, with every collision kept
 /// and reported rather than merged. The result does not depend on the order
 /// symbols are inserted in.
 ///
-/// **Field policy** (P1.3c; a default pending human review). A Rust getter
-/// is often named like the field it returns, so the field
-/// (`spike/Server#export_path.`) and the method
-/// (`spike/impl#[Server]export_path().`) share the canonical name
-/// `spike.Server.export_path`. When a canonical name belongs to at least
-/// one field ([`is_field`]) and at least one other symbol, each field
-/// there gets [`FIELD_SUFFIX`]. Fields that collide with nothing, or only
-/// with other fields, keep their plain names. Whatever still collides
+/// **Namespace policy** (P1.3c; a default pending human review). Rust keeps
+/// types and values in separate namespaces, so a module and a function can
+/// share a name (`checker/` and `checker().`), and a getter is often named
+/// like the field it returns (`spike/Server#export_path.` and
+/// `spike/impl#[Server]export_path().`). When symbols of more than one
+/// [`Namespace`] class (a type, or one [`ValueKind`]) share a canonical
+/// name, one class keeps the plain name and every value of another class
+/// gets its kind's [suffix](ValueKind::suffix):
+///
+/// - a type keeps it, so `checker/` is `….checker` and `checker().` is
+///   `….checker+fn`;
+/// - with no type there, the first [`ValueKind`] present keeps it, so a
+///   getter stays `….export_path` and its field is `….export_path+field`.
+///
+/// Only colliding names change. Macros and metas are never suffixed and do
+/// not count as a class. Symbols of one class that share a name (two
+/// functions, two fields) are still a collision: whatever still collides
 /// afterwards is reported by [`CanonicalNames::collisions`], never merged.
 #[derive(Debug, Clone, Default)]
 pub struct CanonicalNames {
     /// Base canonical name to the distinct SCIP symbols that have it, each
-    /// with whether it is a field.
-    by_name: BTreeMap<String, BTreeMap<String, bool>>,
+    /// with its namespace.
+    by_name: BTreeMap<String, BTreeMap<String, Namespace>>,
 }
 
 impl CanonicalNames {
-    /// Records `symbol`, and returns whether it has a canonical name: a
-    /// symbol with none (a local, a parameter, an impl block) is not
-    /// recorded. Inserting the same symbol twice is not a collision. The
-    /// final names, after the field policy, come from
-    /// [`assigned`](Self::assigned).
+    /// Records `symbol` with the [`namespace`] its descriptors give, and
+    /// returns whether it has a canonical name: a symbol with none (a local,
+    /// a parameter, an impl block) is not recorded. Inserting the same
+    /// symbol twice is not a collision. The final names, after the
+    /// namespace policy, come from [`assigned`](Self::assigned).
     ///
     /// # Errors
     ///
     /// As [`canonical_name`].
     pub fn insert(&mut self, symbol: &Symbol) -> Result<bool, CanonicalError> {
+        let space = match symbol {
+            Symbol::Global(global) => namespace(global),
+            Symbol::Local(_) => Namespace::Other,
+        };
+        self.insert_as(symbol, space)
+    }
+
+    /// As [`insert`](Self::insert), with the namespace given, e.g. from the
+    /// provider's symbol kind.
+    ///
+    /// # Errors
+    ///
+    /// As [`canonical_name`].
+    pub fn insert_as(&mut self, symbol: &Symbol, space: Namespace) -> Result<bool, CanonicalError> {
         let Some(name) = canonical_name(symbol)? else {
             return Ok(false);
-        };
-        let field = match symbol {
-            Symbol::Global(global) => is_field(global),
-            Symbol::Local(_) => false,
         };
         self.by_name
             .entry(name)
             .or_default()
-            .insert(symbol.to_string(), field);
+            .insert(symbol.to_string(), space);
         Ok(true)
     }
 
-    /// Final name to the symbols that have it, after the field policy.
+    /// Final name to the symbols that have it, after the namespace policy.
     fn resolved(&self) -> BTreeMap<String, BTreeSet<&str>> {
         let mut out: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
         for (name, symbols) in &self.by_name {
-            let suffix_fields = symbols.len() > 1
-                && symbols.values().any(|&field| field)
-                && symbols.values().any(|&field| !field);
-            for (symbol, &field) in symbols {
-                let name = if suffix_fields && field {
-                    format!("{name}{FIELD_SUFFIX}")
-                } else {
-                    name.clone()
+            let classes: BTreeSet<Namespace> = symbols
+                .values()
+                .copied()
+                .filter(|space| *space != Namespace::Other)
+                .collect();
+            // `Type` sorts first, then the value kinds in precedence order.
+            let plain = if classes.len() > 1 {
+                classes.first().copied()
+            } else {
+                None
+            };
+            for (symbol, &space) in symbols {
+                let name = match space {
+                    Namespace::Value(kind) if plain.is_some_and(|p| p != space) => {
+                        format!("{name}{}", kind.suffix())
+                    }
+                    _ => name.clone(),
                 };
                 out.entry(name).or_default().insert(symbol);
             }
@@ -449,6 +531,54 @@ mod tests {
                 "demo.spike.Server.root"
             ]
         );
+    }
+
+    #[test]
+    fn a_value_colliding_with_a_type_gets_its_kind() {
+        let p = "rust-analyzer cargo demo 0.1.0 ";
+        let module = format!("{p}checker/");
+        let function = format!("{p}checker().");
+        let constant = format!("{p}checker.");
+        let names = assign(&[&module, &function, &constant]);
+        let assigned = names.assigned();
+        assert_eq!(assigned[&module], "demo.checker");
+        assert_eq!(assigned[&function], "demo.checker+fn");
+        assert_eq!(assigned[&constant], "demo.checker+const");
+        assert_eq!(names.collisions(), vec![]);
+    }
+
+    #[test]
+    fn a_provider_kind_overrides_the_descriptors() {
+        let p = "rust-analyzer cargo demo 0.1.0 ";
+        let module = parse(&format!("{p}limit/")).unwrap_or_else(|e| panic!("{e}"));
+        let fixed = parse(&format!("{p}limit.")).unwrap_or_else(|e| panic!("{e}"));
+        let mut names = CanonicalNames::default();
+        assert_eq!(names.insert(&module), Ok(true));
+        assert_eq!(
+            names.insert_as(&fixed, Namespace::Value(ValueKind::Static)),
+            Ok(true)
+        );
+        assert_eq!(names.assigned()[&fixed.to_string()], "demo.limit+static");
+    }
+
+    #[test]
+    fn macros_are_never_suffixed_and_still_collide() {
+        let names = assign(&["s m n v charge!", "s m n v charge()."]);
+        assert_eq!(names.collisions()[0].name, "charge");
+    }
+
+    #[test]
+    fn namespaces_follow_the_descriptors() {
+        let ns = |s: &str| match parse(s).unwrap_or_else(|e| panic!("{e}")) {
+            Symbol::Global(g) => namespace(&g),
+            Symbol::Local(_) => panic!("local"),
+        };
+        assert_eq!(ns("s m n v a/"), Namespace::Type);
+        assert_eq!(ns("s m n v a/B#"), Namespace::Type);
+        assert_eq!(ns("s m n v a/f()."), Namespace::Value(ValueKind::Fn));
+        assert_eq!(ns("s m n v a/B#f."), Namespace::Value(ValueKind::Field));
+        assert_eq!(ns("s m n v a/F."), Namespace::Value(ValueKind::Const));
+        assert_eq!(ns("s m n v a/f!"), Namespace::Other);
     }
 
     #[test]

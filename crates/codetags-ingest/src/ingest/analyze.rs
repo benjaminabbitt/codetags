@@ -256,11 +256,14 @@ pub(crate) fn analyze(
         let Some(global) = parsed.get(id)?.cloned() else {
             continue;
         };
+        let space = rules::namespace(&global, kind_of(id));
         let symbol = Symbol::Global(global);
-        let named = names.insert(&symbol).map_err(|error| IngestError::Symbol {
-            symbol: id.clone(),
-            message: error.to_string(),
-        })?;
+        let named = names
+            .insert_as(&symbol, space)
+            .map_err(|error| IngestError::Symbol {
+                symbol: id.clone(),
+                message: error.to_string(),
+            })?;
         // No canonical name: an impl block, a container rather than a symbol.
         let (true, Symbol::Global(global)) = (named, symbol) else {
             continue;

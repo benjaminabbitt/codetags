@@ -45,7 +45,7 @@ Feature: SCIP ingest into a generation
     And the ingest reports no canonical-name collisions
 
   # P1.3c (dogfooding); defaults pending human review.
-  Scenario: Impl blocks are not symbols, and a field named like its getter is suffixed
+  Scenario: Impl blocks are not symbols, and a value named like another symbol is suffixed
     When the fixture "rust" is ingested into a new generation
     Then the symbols defined in "src/ledger.rs" are exactly:
       | name                                |
@@ -56,11 +56,17 @@ Feature: SCIP ingest into a generation
       | billing.ledger.Ledger.record        |
       | billing.ledger.Ledger.line          |
       | billing.ledger.Ledger.with          |
+      | billing.ledger.totals               |
+      | billing.ledger.totals.MAX           |
+      | billing.ledger.totals+fn            |
     And the generation's symbols include:
-      | name                                | descriptors                    | kind   | file          | lines | module         |
-      | billing.ledger.Ledger.entries+field | ledger/Ledger#entries.         | field  | src/ledger.rs | 6-7   | billing.ledger |
-      | billing.ledger.Ledger.entries       | ledger/impl#[Ledger]entries(). | method | src/ledger.rs | 26-29 | billing.ledger |
-      | billing.charge.Charge.amount        | charge/Charge#amount.          | field  | src/charge.rs | 19-20 | billing.charge |
+      | name                                | descriptors                    | kind     | file          | lines | module                |
+      | billing.ledger.Ledger.entries+field | ledger/Ledger#entries.         | field    | src/ledger.rs | 6-7   | billing.ledger        |
+      | billing.ledger.Ledger.entries       | ledger/impl#[Ledger]entries(). | method   | src/ledger.rs | 26-29 | billing.ledger        |
+      | billing.charge.Charge.amount        | charge/Charge#amount.          | field    | src/charge.rs | 19-20 | billing.charge        |
+      | billing.ledger.totals               | ledger/totals/                 | module   | src/ledger.rs | 37-42 | billing.ledger        |
+      | billing.ledger.totals+fn            | ledger/totals().               | function | src/ledger.rs | 44-47 | billing.ledger        |
+      | billing.ledger.totals.MAX           | ledger/totals/MAX.             | constant | src/ledger.rs | 40-41 | billing.ledger.totals |
     And the symbols defined in "src/charge.rs" are exactly:
       | name                                 |
       | billing.charge                       |
@@ -162,9 +168,9 @@ Feature: SCIP ingest into a generation
     Then the ingest report counts:
       | what                            | count |
       | files                           | 5     |
-      | symbols                         | 43    |
+      | symbols                         | 46    |
       | call sites                      | 22    |
-      | local occurrences               | 71    |
+      | local occurrences               | 72    |
       | operator references             | 18    |
       | references outside a definition | 1     |
 
