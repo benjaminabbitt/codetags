@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # PLAN.md §5: `just check` must exit 0 on Linux, macOS, and Windows.
+  # The Windows leg has no WinFsp installed, on purpose (D3).
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The bundled DuckDB build overflows MAX_PATH under the default target
+      # directory on Windows (V8).
+      - name: Short target directory (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo 'CARGO_TARGET_DIR=C:\t' >> "$GITHUB_ENV"
+
+      - name: Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> ${{ runner.os == 'Windows' && 'C:\\t' || 'target' }}"
+
+      - uses: extractions/setup-just@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Assert unprivileged
+        shell: bash
+        run: ci/assert-unprivileged.sh
+
+      - name: just check
+        shell: bash
+        run: just check
