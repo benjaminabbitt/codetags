@@ -23,7 +23,7 @@ setup-providers:
 # --- the green light -----------------------------------------------------
 
 # Universal check: must exit 0 on Linux, macOS, and Windows (PLAN.md §0.6).
-check: fmt-check lint test bdd tags-check
+check: fmt-check lint license-check test bdd tags-check
     @echo "check: green"
 
 fmt:
@@ -34,6 +34,10 @@ fmt-check:
 
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
+
+# Licence boundaries (PLAN.md §0.12, D9); policy in deny.toml.
+license-check:
+    cargo deny check licenses bans
 
 test:
     cargo test --workspace
