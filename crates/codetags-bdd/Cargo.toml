@@ -12,6 +12,7 @@ publish.workspace = true
 codetags-mount-fuse.workspace = true
 tagma-core.workspace = true
 codetags-model.workspace = true
+codetags-names.workspace = true
 tempfile.workspace = true
 cucumber.workspace = true
 regex.workspace = true

@@ -93,6 +93,30 @@ Then the index holds only the generations {string}
       # other generation has any file left in the index directory
 ```
 
+## Names and path profile
+
+`{platforms}` is one or more of `linux`, `macos`, `windows`, joined by
+`, ` or ` and ` (e.g. `linux, macos and windows`). `{word}` in the item-id
+steps is `file` or `symbol`. A `{string}` may be single-quoted to hold `"`.
+
+```gherkin
+When the query element {string} is encoded as a path component
+Then the path component is {string}
+Then the path component is a legal file name on {platforms}
+Then the path component decodes to {string} on {platforms}
+Then the path component {string} decodes to {string} on {platforms}
+Then the path component {string} does not decode on {platforms}
+
+When the item id for {word} {string} is written     # file → file:<path>, symbol → sym:<name>
+Then the written id is {string}
+Then the written id reads back as {word} {string}
+
+Given a directory holding these entries:            # table with columns: name | id
+When collision suffixes are applied
+Then the entries are named:                         # table with columns: id | name
+Then applying them to the entries in reverse order gives the same names
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

@@ -12,6 +12,7 @@ pub mod ran;
 mod steps_cli;
 mod steps_model;
 mod steps_mount;
+mod steps_names;
 mod steps_query;
 mod steps_store;
 mod tags;
@@ -80,6 +81,9 @@ pub struct CodetagsWorld {
     held: Option<std::sync::Arc<codetags_model::Generation>>,
     /// A generation writer this process holds open, with its write lock.
     writer: Option<codetags_model::GenerationWriter>,
+    // P1.2 (codetags-names): state for features/names/.
+    /// Path-profile, item-id and collision-suffix state.
+    names: steps_names::NamesState,
 }
 
 impl CodetagsWorld {
