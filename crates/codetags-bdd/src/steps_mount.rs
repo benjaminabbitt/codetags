@@ -1,4 +1,5 @@
-//! Steps for live mounts. The Linux FUSE spike (P0b S1) is the first backend.
+//! Steps for live mounts. The Linux FUSE spike (P0b S1) is the first backend;
+//! the macOS NFS loopback spike (P0b S2) the second.
 
 use cucumber::{given, then};
 
@@ -49,6 +50,128 @@ mod linux {
     fn the_mount_is_unmounted(world: &mut CodetagsWorld) {
         let mounted = world.mount.take().expect("a Given step mounted something");
         mounted.unmount().expect("unmount");
+    }
+}
+
+/// The macOS NFS loopback spike (P0b S2), including its staleness probes.
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use cucumber::{given, then, when};
+
+    use crate::CodetagsWorld;
+
+    fn mount(world: &mut CodetagsWorld, extra: &[&str]) {
+        let dir = world.scratch().join("mnt");
+        std::fs::create_dir_all(&dir).expect("create mount dir");
+        let mounted = codetags_mount_nfs::mount::mount_hello(&dir, extra)
+            .expect("mount through mount_nfs (run `codetags doctor` if this fails)");
+        world.nfs_mount = Some(mounted);
+        world.mount_dir = Some(dir);
+    }
+
+    fn mounted_path(world: &CodetagsWorld, name: &str) -> PathBuf {
+        world
+            .mount_dir
+            .as_ref()
+            .expect("a Given step mounted something")
+            .join(name)
+    }
+
+    /// Whether a lookup of `path` finds it. Any error but ENOENT fails.
+    fn exists(path: &std::path::Path) -> bool {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => panic!("look up {}: {error}", path.display()),
+        }
+    }
+
+    fn gains(world: &mut CodetagsWorld, name: &str, content: &str, bump: bool) {
+        world
+            .nfs_mount
+            .as_ref()
+            .expect("a Given step mounted something")
+            .server()
+            .add_file(name, content.as_bytes(), bump);
+    }
+
+    #[given(expr = "the hello filesystem is mounted on an empty directory")]
+    fn hello_is_mounted(world: &mut CodetagsWorld) {
+        mount(world, &[]);
+    }
+
+    #[given(
+        expr = "the hello filesystem is mounted on an empty directory with the extra mount option {string}"
+    )]
+    fn hello_is_mounted_with(world: &mut CodetagsWorld, option: String) {
+        mount(world, &[option.as_str()]);
+    }
+
+    #[when(expr = "the mount is unmounted")]
+    fn the_mount_is_unmounted(world: &mut CodetagsWorld) {
+        let mounted = world
+            .nfs_mount
+            .take()
+            .expect("a Given step mounted something");
+        mounted.unmount().expect("unmount");
+    }
+
+    #[given(expr = "{string} is missing from the mount")]
+    fn is_missing(world: &mut CodetagsWorld, name: String) {
+        let path = mounted_path(world, &name);
+        assert!(!exists(&path), "{} exists", path.display());
+    }
+
+    #[when(expr = "the filesystem gains {string} holding {string}")]
+    fn the_filesystem_gains(world: &mut CodetagsWorld, name: String, content: String) {
+        gains(world, &name, &content, false);
+    }
+
+    #[when(expr = "the filesystem gains {string} holding {string} and bumps the directory's mtime")]
+    fn the_filesystem_gains_and_bumps(world: &mut CodetagsWorld, name: String, content: String) {
+        gains(world, &name, &content, true);
+    }
+
+    #[then(expr = "{string} is still missing from the mount after {int} seconds")]
+    fn still_missing_after(world: &mut CodetagsWorld, name: String, seconds: u64) {
+        let path = mounted_path(world, &name);
+        let start = Instant::now();
+        let mut lookups = 0u32;
+        while start.elapsed() < Duration::from_secs(seconds) {
+            lookups += 1;
+            assert!(
+                !exists(&path),
+                "{name} appeared after {} ms ({lookups} lookups)",
+                start.elapsed().as_millis()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        eprintln!("s2: {name} still missing after {seconds} s ({lookups} lookups)");
+    }
+
+    #[then(expr = "{string} appears in the mount within {int} second(s)")]
+    fn appears_within(world: &mut CodetagsWorld, name: String, seconds: u64) {
+        let path = mounted_path(world, &name);
+        let start = Instant::now();
+        let mut lookups = 0u32;
+        loop {
+            lookups += 1;
+            if exists(&path) {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(seconds),
+                "{name} still missing after {seconds} s ({lookups} lookups)"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        eprintln!(
+            "s2: {name} appeared after {} ms ({lookups} lookups)",
+            start.elapsed().as_millis()
+        );
     }
 }
 

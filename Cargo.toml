@@ -40,6 +40,11 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 fuser = "0.18"
 proptest = "1"
+# macOS NFS loopback backend (P0b S2, V42): chosen over nfsserve.
+nfs3_server = "0.11"
+nfs3_client = "0.9"
+tokio = { version = "1", default-features = false }
+getrandom = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

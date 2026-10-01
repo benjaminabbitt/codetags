@@ -59,6 +59,10 @@ pub struct CodetagsWorld {
     /// scratch directory holding its mount point is deleted.
     #[cfg(target_os = "linux")]
     mount: Option<codetags_mount_fuse::spike::Mounted>,
+    /// A live NFS loopback mount (macOS), declared before `scratch` for the
+    /// same reason.
+    #[cfg(target_os = "macos")]
+    nfs_mount: Option<codetags_mount_nfs::mount::Mounted>,
     /// Where the live mount is (or was).
     mount_dir: Option<PathBuf>,
     /// The last process a step ran.

@@ -17,5 +17,8 @@ tempfile.workspace = true
 cucumber.workspace = true
 regex.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+codetags-mount-nfs.workspace = true
+
 [lints]
 workspace = true

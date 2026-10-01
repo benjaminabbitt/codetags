@@ -153,13 +153,63 @@ jobs:
           path: ${{ runner.temp }}/bdd-ran.txt
           if-no-files-found: warn
 
+  # PLAN.md §5: live NFS loopback mounts as the runner user, with no sudo
+  # (P0b S2). macOS's built-in mount_nfs needs no setup.
+  mount-macos:
+    name: mount (macos-15)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # As in the check job: rust-cache prunes the downloaded libduckdb but
+      # keeps libduckdb-sys's build-script fingerprint (V29).
+      - name: Re-fetch the prebuilt libduckdb
+        shell: bash
+        run: cargo clean -p libduckdb-sys
+
+      - uses: extractions/setup-just@v2
+
+      - name: Assert unprivileged
+        shell: bash
+        run: ci/assert-unprivileged.sh
+
+      - name: just doctor
+        shell: bash
+        run: just doctor
+
+      - name: just test-mount
+        shell: bash
+        env:
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+        run: just test-mount
+
+      # Diagnostic: a mount left behind by a failed scenario.
+      - name: NFS mounts after the tests
+        if: ${{ always() }}
+        shell: bash
+        run: mount -t nfs || true
+
+      - name: Upload the BDD record
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-ran-mount-macos
+          path: ${{ runner.temp }}/bdd-ran.txt
+          if-no-files-found: warn
+
   # PLAN.md §0.11: every scenario must run in some job, or be listed in
   # ci/expected-skips.txt. Runs whether the BDD jobs pass or fail, so a
   # failing run still reports what went unrun. Add every job that runs BDD
   # to `needs`.
   bdd-coverage:
     name: bdd-coverage
-    needs: [check, mount-linux]
+    needs: [check, mount-linux, mount-macos]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:

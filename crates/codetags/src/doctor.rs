@@ -62,11 +62,25 @@ fn mount_backend(report: &mut Report) {
     }
 }
 
+/// macOS mounts the in-process NFS loopback server with the built-in
+/// `mount_nfs` (C3). Without it, only static views work: reported, not an
+/// error.
 #[cfg(target_os = "macos")]
 fn mount_backend(report: &mut Report) {
-    report
-        .lines
-        .push("mount backend: nfs loopback (not built yet: P0b S2)".to_string());
+    use codetags_mount_nfs::options::MOUNT_NFS;
+
+    report.lines.push("mount backend: nfs loopback".to_string());
+    if std::path::Path::new(MOUNT_NFS).is_file() {
+        report.lines.push(format!("mount_nfs: {MOUNT_NFS}"));
+    } else {
+        report
+            .lines
+            .push(format!("mount_nfs: not found at {MOUNT_NFS}"));
+        report.lines.push(
+            "hint: live mounts need macOS's built-in NFS client; static views work without it"
+                .to_string(),
+        );
+    }
 }
 
 #[cfg(windows)]

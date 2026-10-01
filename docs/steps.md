@@ -45,15 +45,17 @@ Then the query fails
 
 ## Live mounts
 
-The Linux FUSE spike (P0b S1) is the first backend. The mount steps that
-mount or unmount are defined on Linux only; tag scenarios that use them
-`@linux @mount`. The mount is unmounted, if still mounted, when the scenario
-ends.
+The Linux FUSE spike (P0b S1) is the first backend, and the macOS NFS
+loopback spike (P0b S2) the second. The mount steps that mount or unmount are
+defined on Linux and macOS only; tag scenarios that use them `@mount` and with
+the OS. The mount is unmounted, if still mounted, when the scenario ends.
 
 ```gherkin
 Given the hello filesystem is mounted on an empty directory
-      # P0b S1's read-only, one-file filesystem, mounted unprivileged through
-      # fusermount3 on a new directory in the scenario's scratch directory
+      # the spike's read-only, one-file filesystem, mounted unprivileged on a
+      # new directory in the scenario's scratch directory: through fusermount3
+      # on Linux (S1); on macOS (S2) served by an in-process NFSv3 server on
+      # 127.0.0.1 and mounted with /sbin/mount_nfs, with actimeo=0
 Given a fusermount3 that is not setuid root comes first on PATH
       # Unix only: puts a fake, non-setuid fusermount3 first on PATH and
       # unsets FUSERMOUNT_PATH, for processes that `codetags is run with` starts
@@ -61,6 +63,26 @@ When the mount is unmounted
 Then the mount lists exactly {string}                # whitespace-separated names, compared as sorted lists; "" = empty
 Then reading {string} through the mount gives {string}   # file name in the mount; content, trailing whitespace trimmed
 Then the mount directory is empty again
+```
+
+macOS only (S2). These steps measure the NFS client's caches: the server
+cannot push an invalidation, so a change shows only when the client asks
+again. "Missing" means `stat` of the name in the mount's root fails with
+`ENOENT`.
+
+```gherkin
+Given the hello filesystem is mounted on an empty directory with the extra mount option {string}
+      # as above, with one more mount_nfs `-o` option, e.g. "nonegnamecache"
+Given {string} is missing from the mount
+      # a lookup through the mount, which the client may cache as a negative entry
+When the filesystem gains {string} holding {string}
+      # the server adds a file to the root in process; the root's mtime is unchanged
+When the filesystem gains {string} holding {string} and bumps the directory's mtime
+      # as above, and the root's mtime becomes the current time
+Then {string} is still missing from the mount after {int} seconds
+      # looks the name up every 100 ms for that long; fails if it ever appears
+Then {string} appears in the mount within {int} second(s)
+      # looks the name up every 50 ms; prints how long it took on stderr
 ```
 
 ## Generation store

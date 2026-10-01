@@ -12,6 +12,9 @@ publish.workspace = true
 clap.workspace = true
 codetags-mount-fuse.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+codetags-mount-nfs.workspace = true
+
 [dev-dependencies]
 codetags-bdd.workspace = true
 futures.workspace = true
