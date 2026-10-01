@@ -1,0 +1,18 @@
+{
+  "name": "codetags-lsp-recorder",
+  "version": "0.1.0",
+  "description": "rust-analyzer through codetags-lsp record, which passes the session through unchanged and logs every LSP message to .codetags/local/ (M3 stage 0, docs/lsp-stage0.md).",
+  "author": {
+    "name": "codetags"
+  },
+  "license": "BSD-3-Clause",
+  "lspServers": {
+    "rust-analyzer": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/rust-analyzer-recorder",
+      "extensionToLanguage": {
+        ".rs": "rust"
+      },
+      "workspaceFolder": "${CLAUDE_PROJECT_DIR}"
+    }
+  }
+}
