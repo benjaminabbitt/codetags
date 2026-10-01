@@ -25,5 +25,10 @@ winfsp.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+# S4's Windows name probe (docs/verification.md). Needs WinFsp, so it is
+# #[ignore]d and `just test-mount` runs it on Windows.
+[[test]]
+name = "name_probe"
+
 [lints]
 workspace = true

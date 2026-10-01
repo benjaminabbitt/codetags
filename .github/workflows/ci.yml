@@ -297,8 +297,8 @@ jobs:
           path: ${{ runner.temp }}/bdd-ran.txt
           if-no-files-found: warn
 
-  # PLAN.md §5: live WinFsp mounts from a de-elevated process (P0b S3).
-  # WinFsp is installed elevated, as an admin would once (D3).
+  # PLAN.md §5: live WinFsp mounts from a de-elevated process (P0b S3), and
+  # S4's name probe. WinFsp is installed elevated, as an admin would once (D3).
   mount-windows:
     name: mount (windows-2025, winfsp)
     runs-on: windows-2025
@@ -330,6 +330,13 @@ jobs:
           choco install winfsp -y --no-progress
           Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp' | Select-Object InstallDir
 
+      # S4's name probe runs rg from Git Bash against the mount.
+      - name: Install ripgrep
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rg -ErrorAction SilentlyContinue)) { choco install ripgrep -y --no-progress }
+          rg --version
+
       - name: Assert unprivileged (de-elevated)
         shell: pwsh
         run: ci/run-deelevated.ps1 "$env:ProgramFiles\Git\bin\bash.exe" ci/assert-unprivileged.sh
@@ -342,6 +349,7 @@ jobs:
         shell: pwsh
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+          CODETAGS_NAME_PROBE_OUT: ${{ runner.temp }}/name-probe.md
         run: ci/run-deelevated.ps1 just test-mount
 
       - name: Upload the BDD record
@@ -350,6 +358,15 @@ jobs:
         with:
           name: bdd-ran-mount-windows
           path: ${{ runner.temp }}/bdd-ran.txt
+          if-no-files-found: warn
+
+      # S4's findings (docs/verification.md).
+      - name: Upload the name probe table
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: name-probe-windows
+          path: ${{ runner.temp }}/name-probe.md
           if-no-files-found: warn
 
   # PLAN.md §0.11: every scenario must run in some job, or be listed in
