@@ -33,7 +33,7 @@ use std::path::Path;
 
 use duckdb::{AccessMode, Config};
 
-pub use duckdb::{Connection, Error};
+pub use duckdb::{Connection, Error, ToSql};
 pub use error::StoreError;
 pub use reader::{Generation, GenerationReader};
 pub use schema::SCHEMA_VERSION;

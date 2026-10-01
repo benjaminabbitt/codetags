@@ -24,7 +24,12 @@ use crate::StoreError;
 ///
 /// Bump it on any change to [`SCHEMA_SQL`]; old generations are then rebuilt,
 /// not migrated.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// - 1: P1.1, the brief's sketch plus `run`, `run_file` and `file`.
+/// - 2: P1.3, SCIP ingest: canonical names, module ancestors, the `external`
+///   flag and package on `symbol`; the run, column, reference kind and
+///   constraints on `call_site`.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The DDL of one generation, without the `schema_info` row.
 pub const SCHEMA_SQL: &str = "
@@ -61,22 +66,47 @@ CREATE TABLE file (
   size         BIGINT NOT NULL
 );
 
+-- Every project definition, and every symbol a call site targets.
 CREATE TABLE symbol (
-  id TEXT PRIMARY KEY, lang TEXT, kind TEXT, file TEXT,
-  start_line INT, end_line INT, signature TEXT, module TEXT
+  id         TEXT PRIMARY KEY,  -- the exact SCIP symbol
+  -- The canonical dotted name (PLAN.md §2.7, D15). Not unique: two symbols
+  -- with one name are a reported collision, never merged.
+  name       TEXT NOT NULL,
+  lang       TEXT,
+  kind       TEXT NOT NULL,     -- e.g. function, method, trait_method, struct, module, macro
+  file       TEXT,              -- NULL when the project holds no definition of it
+  start_line INT,               -- 1-based, of the definition's enclosing range
+  end_line   INT,
+  signature  TEXT,
+  module     TEXT,              -- innermost dotted module; NULL at a package root
+  modules    TEXT[] NOT NULL,   -- every ancestor module, outermost first
+  package    TEXT,              -- the SCIP package name
+  external   BOOLEAN NOT NULL   -- belongs to a package the index defines nothing in
 );
 
 CREATE TABLE call_site (
-  site_id BIGINT PRIMARY KEY, caller TEXT, file TEXT, line INT, ordinal INT,
-  receiver_text TEXT, declared_target TEXT,
-  dispatch TEXT,   -- static | virtual | dynamic | unknown
-  source TEXT      -- scip@<sha> | lsp@<ver> | treesitter | callgraph
+  site_id         BIGINT PRIMARY KEY,
+  run_id          INTEGER NOT NULL REFERENCES run,
+  caller          TEXT NOT NULL,  -- symbol id of the innermost enclosing definition
+  file            TEXT NOT NULL,
+  line            INT NOT NULL,   -- 1-based
+  col             INT NOT NULL,   -- 1-based, in the provider's position encoding
+  ordinal         INT NOT NULL,   -- 1-based position among the caller's sites
+  -- call: followed by an argument list; value: a callable used as a value
+  -- (a callback, a function pointer); macro: a macro invocation.
+  ref_kind        TEXT NOT NULL CHECK (ref_kind IN ('call', 'value', 'macro')),
+  receiver_text   TEXT,
+  declared_target TEXT NOT NULL,
+  dispatch        TEXT NOT NULL
+                  CHECK (dispatch IN ('static', 'virtual', 'dynamic', 'unknown')),
+  source          TEXT NOT NULL   -- scip@<indexer>-<version> | lsp@<ver> | treesitter | callgraph
 );
 
 CREATE TABLE call_target (
-  site_id BIGINT REFERENCES call_site,
-  target TEXT,
-  method TEXT      -- declared | cha | rta | vta | jelly | di-binding | name-match
+  site_id BIGINT NOT NULL REFERENCES call_site,
+  target  TEXT NOT NULL,
+  method  TEXT NOT NULL CHECK (method IN
+            ('declared', 'cha', 'rta', 'vta', 'jelly', 'di-binding', 'name-match'))
 );
 ";
 
@@ -179,6 +209,45 @@ mod tests {
             db.execute_batch("INSERT INTO run VALUES (2, 'p', 'v', [], now(), NULL, 'bogus', 't')")
                 .is_err(),
             "status is constrained"
+        );
+    }
+
+    #[test]
+    fn call_sites_are_constrained() {
+        let db = fresh();
+        db.execute_batch(
+            "INSERT INTO run VALUES (1, 'p', 'v', [], now(), now(), 'succeeded', 't');
+             INSERT INTO symbol (id, name, kind, modules, external)
+                 VALUES ('s f().', 'f', 'function', ['m'], false);
+             INSERT INTO call_site VALUES
+                 (1, 1, 's f().', 'a.rs', 1, 1, 1, 'call', NULL, 's f().', 'static', 'scip@x');
+             INSERT INTO call_target VALUES (1, 's f().', 'declared');",
+        )
+        .expect("a valid call site");
+        for (column, bad) in [("ref_kind", "jump"), ("dispatch", "maybe")] {
+            let (ref_kind, dispatch) = if column == "ref_kind" {
+                (bad, "static")
+            } else {
+                ("call", bad)
+            };
+            let insert = format!(
+                "INSERT INTO call_site VALUES
+                     (2, 1, 's f().', 'a.rs', 1, 1, 1, '{ref_kind}', NULL, 's f().', '{dispatch}', 'x')"
+            );
+            assert!(db.execute_batch(&insert).is_err(), "{column} = {bad}");
+        }
+        assert!(
+            db.execute_batch("INSERT INTO call_target VALUES (1, 's f().', 'guess')")
+                .is_err(),
+            "method is constrained"
+        );
+        assert!(
+            db.execute_batch(
+                "INSERT INTO symbol (id, name, kind, modules, external)
+                     VALUES ('s g().', NULL, 'function', [], false)"
+            )
+            .is_err(),
+            "every symbol has a canonical name"
         );
     }
 

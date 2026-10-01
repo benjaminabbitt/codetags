@@ -15,6 +15,9 @@ use super::{ProviderError, ScipRun, check_output};
 /// directory.
 pub const INDEX_FILE: &str = "index.scip";
 
+/// The provider's name in a generation's `run` table.
+pub const PROVIDER: &str = "rust-analyzer scip";
+
 /// Runs `rust-analyzer scip`.
 #[derive(Debug, Clone)]
 pub struct RustAnalyzer {

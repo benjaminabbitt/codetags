@@ -260,6 +260,51 @@ Then a batch the watcher reported was marked as a rescan
       # any batch since the watch started
 ```
 
+### Ingest into a generation (P1.3)
+
+The fixture's provider run (shared, as above) is ingested into a new
+generation of the scenario's index, the same `.codetags/index/` the
+generation-store steps use, so their steps apply to it. "The generation" is
+the newest complete one. Symbols and call-site callers and targets are named
+by canonical name (D15); a `descriptors` cell is the SCIP symbol's
+descriptors, as above. Booleans are `yes` or `no`; lines are `<first>-<last>`;
+an empty cell is NULL. Tables compare as sorted multisets.
+
+```gherkin
+Given the fixture {string} has been ingested into a new generation
+When the fixture {string} is ingested into a new generation
+Then the generation's symbols include:
+      # table: name | descriptors | kind | file | lines | module | external
+      # (any subset of columns after name); each name names exactly one symbol
+Then the symbols defined in {string} are exactly:      # table: name; symbols whose file is that path
+Then the ingest reports no canonical-name collisions
+Then the call sites in {string} on line {int} are:
+      # table: caller | target | kind | dispatch | external (the target's)
+Then there are no call sites in {string} on line {int}
+Then no symbol or call site in the generation comes from a local symbol
+Then every call site has exactly one call target, its declared target, with the method {string}
+Then every call site's source matches {string}               # Rust `regex` syntax
+Then the generation holds one succeeded run of {string}      # the run's provider
+Then the run's edge counts are:                              # table: file | edges; all of run_file
+Then the ingest report counts:
+      # table: what | count; what is one of: files, symbols, call sites,
+      # local occurrences, operator references, non-callable references,
+      # references outside a definition
+```
+
+`codetags index` end to end. The scenario's directory is its scratch
+directory, whose `.codetags/index/` the generation-store steps read. Processes
+started there get `CARGO_TARGET_DIR` inside it, so a provider writes nothing
+into the copied project.
+
+```gherkin
+Given the scenario's directory holds a copy of the fixture {string}
+When codetags is run in the scenario's directory with {string}
+      # as `codetags is run with`, with the scenario's directory as the working directory
+Then the file {string} in the scenario's directory holds the lines {string}
+      # whitespace-separated; blank lines and `#` comments are ignored
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

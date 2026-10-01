@@ -515,7 +515,7 @@ Because of D2, mount risk is retired early. Each spike:
 |---|---|---|
 | P1.1 | CORE | `codetags-model`: the brief's schema plus `run` and `file` tables, and the generation store (write, complete, open-latest, GC). Scenario: a reader holds generation N while a writer completes N+1. |
 | P1.2 | CORE | `codetags-names` (D15): the SCIP symbol parser and canonical names (dotted, real characters, no `/`, collisions reported), the Windows private-use mapping, item ids for the tags file (tagma quoting when needed), and collision suffixes. Property tests: names never contain `/` or control characters; the private-use mapping round-trips; suffixes leave no case-fold collisions. |
-| P1.3 | CORE | SCIP ingest: attribute each reference to the innermost enclosing range; capture functions used as values; record control context and literal names (brief rules). |
+| P1.3 | CORE | SCIP ingest: attribute each reference to the innermost enclosing range; capture functions used as values; record control context and literal names (brief rules). **Split: P1.3b** takes control context and literal names, which SCIP does not carry. |
 | P1.4 | CORE | Rust provider (`rust-analyzer scip`): filter `local N`, expand trait and `dyn` calls. |
 | P1.5 | CORE | Go provider: `scip-go` plus `tools/gocallgraph`, joined by call site. |
 | P1.6 | CORE | TypeScript provider: `scip-typescript` (raise the file-size limit) ∪ Jelly. Failures are loud. |
