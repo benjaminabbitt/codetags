@@ -271,7 +271,7 @@ jobs:
           go-version: ${{ steps.go.outputs.version }}
           cache-dependency-path: tools/gocallgraph/go.sum
 
-      # Node for the npm providers (scip-typescript, Jelly), at the exact
+      # Node for the npm providers (scip-typescript, Jelly, scip-python), at the exact
       # version providers.toml pins. setup-node's npm prefix is per-user, so
       # `npm install -g` in setup-providers needs no privilege.
       - name: Node version from providers.toml
@@ -282,6 +282,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ steps.node.outputs.version }}
+
+      # The Python interpreter and pip that scip-python needs (P1.7), at the
+      # version providers.toml pins.
+      - name: Python version from providers.toml
+        id: python
+        shell: bash
+        run: echo "version=$(sed -n '/^\[python\]/,/^\[/s/^version *= *"\(.*\)".*/\1/p' providers.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.python.outputs.version }}
 
       - name: just setup-providers
         shell: bash

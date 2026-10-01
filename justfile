@@ -24,6 +24,8 @@ setup:
 # prefix, which must be per-user (nvm, actions/setup-node, or `npm config set
 # prefix ~/.local`): providers never install or run as root (PLAN.md §0.10).
 # Needs Node 22 or later on PATH; providers.toml pins the version CI uses.
+# Python: scip-python, `npm install -g` the same way; it needs python3 (or
+# python) and pip on PATH (CI: actions/setup-python).
 setup-providers:
     rustup toolchain install
     rustup component add rust-analyzer --toolchain "$(sed -n '/^\[rust-analyzer\]/,/^\[/s/^toolchain *= *"\(.*\)".*/\1/p' providers.toml)"
@@ -37,6 +39,10 @@ setup-providers:
     npm install -g --no-fund --no-audit "$(sed -n '/^\[scip-typescript\]/,/^\[/s/^npm *= *"\(.*\)".*/\1/p' providers.toml)" "$(sed -n '/^\[jelly\]/,/^\[/s/^npm *= *"\(.*\)".*/\1/p' providers.toml)"
     scip-typescript --version
     jelly --version
+    @if command -v python3 >/dev/null; then python3 --version; elif command -v python >/dev/null; then python --version; else echo "setup-providers: scip-python needs python3 or python on PATH (providers.toml [python])"; exit 1; fi
+    @command -v pip3 >/dev/null || command -v pip >/dev/null || { echo "setup-providers: scip-python needs pip3 or pip on PATH"; exit 1; }
+    npm install -g --no-fund --no-audit "$(sed -n '/^\[scip-python\]/,/^\[/s/^npm *= *"\(.*\)".*/\1/p' providers.toml)"
+    @want="$(sed -n '/^\[scip-python\]/,/^\[/s/^npm *= *".*@\(.*\)".*/\1/p' providers.toml)"; got="$(scip-python --version 2>&1)"; if [ "$got" = "$want" ]; then echo "scip-python $got"; else echo "setup-providers: providers.toml pins scip-python $want; found: $got"; exit 1; fi
     @echo "setup-providers: ready"
 
 # --- the green light -----------------------------------------------------
