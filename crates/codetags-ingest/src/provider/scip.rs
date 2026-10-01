@@ -30,7 +30,8 @@ pub struct ScipIndex {
 /// One source file in the index.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Document {
-    /// Path relative to the project root, with `/` separators.
+    /// Path relative to the project root, with `/` separators on every OS
+    /// (normalized at read time, V71).
     pub relative_path: String,
     /// Every occurrence in the file, in the provider's order.
     pub occurrences: Vec<Occurrence>,
@@ -233,10 +234,18 @@ fn decode_document(raw: &scip::types::Document) -> Result<Document, ReadError> {
         .collect::<Result<_, _>>()?;
     let symbols = raw.symbols.iter().map(decode_symbol).collect();
     Ok(Document {
-        relative_path: raw.relative_path.clone(),
+        relative_path: normalize_path(&raw.relative_path),
         occurrences,
         symbols,
     })
+}
+
+/// A document path with `/` separators. SCIP specifies `/`, but
+/// rust-analyzer on Windows writes `\` (V71), so every `\` becomes `/` here
+/// and no consumer ever sees a backslash path. A Unix file name that holds a
+/// literal `\` is therefore misread; such names are not supported.
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 fn decode_occurrence(
@@ -457,6 +466,13 @@ pub(crate) mod tests {
             decode_index(b"\xff\xff\xff not protobuf"),
             Err(ReadError::Decode(_))
         ));
+    }
+
+    #[test]
+    fn backslash_document_paths_read_with_slashes() {
+        let bytes = index_bytes("src\\billing\\charge.rs", vec![]);
+        let index = decode_index(&bytes).unwrap();
+        assert_eq!(index.documents[0].relative_path, "src/billing/charge.rs");
     }
 
     #[test]
