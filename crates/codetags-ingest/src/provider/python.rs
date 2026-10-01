@@ -287,13 +287,14 @@ impl PythonProvider {
         let sites_path = out_dir.join(SITES_FILE);
         let script_path = out_dir.join(SITES_SCRIPT_FILE);
         prepare(out_dir, &[&index_path, &sites_path]).map_err(PythonError::Scip)?;
-        // scip-python drops every file when --cwd is relative (V92), and
-        // writes --output relative to --cwd.
+        // scip-python drops every file when --cwd is relative (V92) or
+        // reaches the project through a symbolic link (V104), and writes
+        // --output relative to --cwd.
         let out_error = |source| ProviderError::OutputDir {
             path: out_dir.to_path_buf(),
             source,
         };
-        let root = std::path::absolute(root)
+        let root = project_root(root)
             .map_err(out_error)
             .map_err(PythonError::Scip)?;
         let index_path = std::path::absolute(&index_path)
@@ -395,6 +396,35 @@ impl PythonProvider {
             });
         }
         Ok((output.status, stderr))
+    }
+}
+
+/// The root as scip-python must be given it: absolute, with symbolic links
+/// resolved. scip-python keeps a file only if its real path starts with the
+/// root as given (V92), so a root reached through a link (macOS's temporary
+/// directories, under `/var` → `/private/var`) gives an index with no
+/// documents (V104). A root that cannot be resolved, e.g. one that does not
+/// exist, is only made absolute, and scip-python reports it.
+fn project_root(root: &Path) -> std::io::Result<PathBuf> {
+    match std::fs::canonicalize(root) {
+        Ok(real) => Ok(without_verbatim_prefix(real)),
+        Err(_) => std::path::absolute(root),
+    }
+}
+
+/// `path` without the `\\?\` prefix Windows' `canonicalize` adds, for a
+/// drive or UNC path: Node and Pyright do not expect verbatim paths. Any
+/// other path is returned unchanged.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
     }
 }
 
@@ -676,6 +706,46 @@ mod tests {
         let attributes = [site(1, 0, "fee", false)];
         let found = unresolved(&index_with(vec![]), &attributes);
         assert!(check_resolved(&attributes, &found, "").is_ok());
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_dropped_and_other_paths_kept() {
+        let plain = |text: &str| without_verbatim_prefix(PathBuf::from(text));
+        assert_eq!(plain(r"\\?\D:\a\project"), PathBuf::from(r"D:\a\project"));
+        assert_eq!(
+            plain(r"\\?\UNC\server\share\project"),
+            PathBuf::from(r"\\server\share\project")
+        );
+        // A verbatim path that is not a drive or UNC path has no plain form.
+        assert_eq!(
+            plain(r"\\?\Volume{1}\project"),
+            PathBuf::from(r"\\?\Volume{1}\project")
+        );
+        assert_eq!(
+            plain("/private/var/project"),
+            PathBuf::from("/private/var/project")
+        );
+    }
+
+    #[test]
+    fn a_root_reached_through_a_symlink_resolves_to_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(not(unix))]
+        let link = real.clone();
+        let expected = without_verbatim_prefix(std::fs::canonicalize(&real).unwrap());
+        assert_eq!(project_root(&link).unwrap(), expected);
+        // A root that does not exist stays as given, made absolute, for
+        // scip-python to report.
+        let missing = dir.path().join("missing");
+        assert_eq!(
+            project_root(&missing).unwrap(),
+            std::path::absolute(&missing).unwrap()
+        );
     }
 
     #[test]
