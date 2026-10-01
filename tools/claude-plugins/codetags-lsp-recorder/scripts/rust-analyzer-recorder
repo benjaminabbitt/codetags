@@ -2,10 +2,13 @@
 # rust-analyzer through `codetags-lsp record` (M3 stage 0, PLAN.md D18;
 # docs/lsp-stage0.md). Claude Code runs this as the plugin's language server.
 #
-# `just lsp-record-setup` installs the recorder in .codetags/local/bin/ and
-# writes the real rust-analyzer's absolute path to
-# .codetags/local/rust-analyzer.path, both in the checkout this plugin lives
-# in. Each server process logs to its own
+# The setup is two files in a `.codetags/local` directory: the recorder,
+# bin/codetags-lsp, and rust-analyzer.path, holding the real rust-analyzer's
+# absolute path. The wrapper uses the project's own setup
+# ($CLAUDE_PROJECT_DIR/.codetags/local) if it has one, as the automated test
+# (features/lsp/claude-client.feature) gives its scratch project; otherwise
+# the checkout this plugin lives in, where `just lsp-record-setup` writes it.
+# Each server process logs to its own
 # $CLAUDE_PROJECT_DIR/.codetags/local/lsp-<UTC time>-<pid>.jsonl.
 #
 # Until setup has run, this runs rust-analyzer from PATH, unrecorded, as the
@@ -13,12 +16,13 @@
 
 here=$(cd "$(dirname "$0")" && pwd) || exit 1
 repo=$(cd "$here/../../../.." && pwd) || exit 1
-local_dir="$repo/.codetags/local"
-recorder="$local_dir/bin/codetags-lsp"
-if [ -x "$recorder" ] && [ -s "$local_dir/rust-analyzer.path" ]; then
-    server=$(cat "$local_dir/rust-analyzer.path")
-    logs="${CLAUDE_PROJECT_DIR:-$repo}/.codetags/local"
-    exec "$recorder" record --server "$server" --log "$logs/lsp-{ts}-{pid}.jsonl" -- "$@"
-fi
+project="${CLAUDE_PROJECT_DIR:-$repo}"
+for local_dir in "$project/.codetags/local" "$repo/.codetags/local"; do
+    recorder="$local_dir/bin/codetags-lsp"
+    if [ -x "$recorder" ] && [ -s "$local_dir/rust-analyzer.path" ]; then
+        server=$(cat "$local_dir/rust-analyzer.path")
+        exec "$recorder" record --server "$server" --log "$project/.codetags/local/lsp-{ts}-{pid}.jsonl" -- "$@"
+    fi
+done
 echo "rust-analyzer-recorder: not set up (run: just lsp-record-setup); running rust-analyzer unrecorded" >&2
 exec rust-analyzer "$@"
