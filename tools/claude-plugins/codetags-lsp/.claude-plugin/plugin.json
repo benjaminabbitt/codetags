@@ -1,0 +1,18 @@
+{
+  "name": "codetags-lsp",
+  "version": "0.1.0",
+  "description": "rust-analyzer shared through lspmux: Claude Code runs it through the codetags shim as an agent session, which never sends document contents (M3, docs/lsp-shim.md).",
+  "author": {
+    "name": "codetags"
+  },
+  "license": "BSD-3-Clause",
+  "lspServers": {
+    "rust-analyzer": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/rust-analyzer",
+      "extensionToLanguage": {
+        ".rs": "rust"
+      },
+      "workspaceFolder": "${CLAUDE_PROJECT_DIR}"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  // M3 (PLAN.md D22, docs/lsp-shim.md): rust-analyzer through the codetags
+  // shim and lspmux, as an editor session, sharing one server with Claude
+  // Code. Needs `just setup-lspmux`, `just lsp-setup` and `codetags lsp
+  // setup` once; until then the wrapper runs rust-analyzer from PATH. On
+  // Windows this resolves to the rust-analyzer.exe wrapper `just lsp-setup`
+  // installs (V119). The extension substitutes ${workspaceFolder} (V118).
+  "rust-analyzer.server.path": "${workspaceFolder}/tools/vscode/rust-analyzer"
+}

@@ -65,7 +65,11 @@ struct Outcome {
     version: String,
     plugins: Vec<String>,
     /// Sanitized recordings, one per server process, in file-name order.
+    /// Through the shim, one per shim process: the client's side.
     recordings: Vec<String>,
+    /// Through the shim: sanitized recordings between lspmux and
+    /// rust-analyzer, one per server process (`server-*.jsonl`).
+    server_recordings: Vec<String>,
     /// `codetags-lsp analyze --marks` of the first recording.
     analysis: Option<String>,
     /// The tail of Claude Code's stderr and stream, for failure messages.
@@ -90,6 +94,9 @@ struct Live {
     marks: Vec<Value>,
     project: PathBuf,
     stderr: PathBuf,
+    /// Through the shim: the lspmux daemon's log, naming the daemons the
+    /// shim started, which [`Live::finish`] kills.
+    daemon_log: Option<PathBuf>,
 }
 
 impl Drop for Live {
@@ -116,6 +123,20 @@ pub(crate) struct ClaudeState {
     outcome: Option<Shared>,
     /// The analysis the `Then` steps read: the session's, or a replay's.
     analysis: Option<String>,
+    /// Through the shim (M3): the plugin to load instead of the recorder,
+    /// the environment Claude Code passes it, and the daemon's log.
+    shim: Option<ShimSetup>,
+}
+
+/// The live test's shim setup: the codetags-lsp plugin, a separate lspmux
+/// config and daemon, and session logs on both sides of lspmux.
+#[derive(Debug)]
+struct ShimSetup {
+    plugin: PathBuf,
+    env: Vec<(String, PathBuf)>,
+    daemon_log: PathBuf,
+    /// Holds the socket's directory until the scenario ends.
+    _runtime: tempfile::TempDir,
 }
 
 /// Whether `text` is a step that drives Claude Code.
@@ -259,10 +280,15 @@ fn start(state: &ClaudeState) -> Live {
         .project
         .clone()
         .expect("the Given step made the scratch project");
-    let plugin = repo_root()
-        .join("tools")
-        .join("claude-plugins")
-        .join("codetags-lsp-recorder");
+    let plugin = state.shim.as_ref().map_or_else(
+        || {
+            repo_root()
+                .join("tools")
+                .join("claude-plugins")
+                .join("codetags-lsp-recorder")
+        },
+        |shim| shim.plugin.clone(),
+    );
     let stderr = project.with_file_name("claude-stderr.txt");
     let mut allowed: Vec<String> = ["Read", "Edit", "Write", "LSP"].map(String::from).to_vec();
     allowed.extend(
@@ -316,6 +342,9 @@ fn start(state: &ClaudeState) -> Live {
             command.env_remove(&name);
         }
     }
+    for (name, value) in state.shim.iter().flat_map(|shim| &shim.env) {
+        command.env(name, value);
+    }
     let mut child = command
         .spawn()
         .unwrap_or_else(|e| panic!("start claude (is it on PATH?): {e}"));
@@ -337,6 +366,7 @@ fn start(state: &ClaudeState) -> Live {
         marks: Vec::new(),
         project,
         stderr,
+        daemon_log: state.shim.as_ref().map(|shim| shim.daemon_log.clone()),
     }
 }
 
@@ -437,6 +467,13 @@ impl Live {
                 Err(e) => return Err(format!("wait for claude: {e}")),
             }
         }
+        // Through the shim, the daemon and its rust-analyzer outlive Claude
+        // Code by design (D21): stop the ones this session started.
+        if let Some(log) = &self.daemon_log {
+            for pid in crate::steps_lspmux::started_daemons(log) {
+                crate::steps_lspmux::kill_tree(pid);
+            }
+        }
         while let Ok(line) = self.lines.recv_timeout(Duration::from_secs(1)) {
             if let Ok(event) = serde_json::from_str::<Value>(&line) {
                 self.events.push(event);
@@ -459,25 +496,8 @@ impl Live {
             .filter_map(|plugin| plugin["name"].as_str().map(str::to_string))
             .collect();
         let local = self.project.join(".codetags").join("local");
-        let mut logs: Vec<PathBuf> = std::fs::read_dir(&local)
-            .map_err(|e| format!("list {}: {e}", local.display()))?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("lsp-") && name.ends_with(".jsonl"))
-            })
-            .collect();
-        logs.sort();
-        let recordings = logs
-            .iter()
-            .map(|log| {
-                let text = std::fs::read_to_string(log)
-                    .map_err(|e| format!("read {}: {e}", log.display()))?;
-                sanitize(&text, &self.project)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let recordings = self.recordings(&local, "lsp-")?;
+        let server_recordings = self.recordings(&local, "server-")?;
         let marks: String = self.marks.iter().map(|mark| format!("{mark}\n")).collect();
         let scratch = self
             .project
@@ -516,9 +536,34 @@ impl Live {
             version,
             plugins,
             recordings,
+            server_recordings,
             analysis,
             diagnostics: self.diagnostics(),
         })
+    }
+}
+
+impl Live {
+    /// The sanitized `<prefix>*.jsonl` logs in `local`, in file-name order.
+    fn recordings(&self, local: &Path, prefix: &str) -> Result<Vec<String>, String> {
+        let mut logs: Vec<PathBuf> = std::fs::read_dir(local)
+            .map_err(|e| format!("list {}: {e}", local.display()))?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".jsonl"))
+            })
+            .collect();
+        logs.sort();
+        logs.iter()
+            .map(|log| {
+                let text = std::fs::read_to_string(log)
+                    .map_err(|e| format!("read {}: {e}", log.display()))?;
+                sanitize(&text, &self.project)
+            })
+            .collect()
     }
 }
 
@@ -1034,6 +1079,140 @@ fn no_end_records(world: &mut CodetagsWorld) {
     assert!(
         !analysis.contains(" closed its stream at ") && !analysis.contains("- server exited at "),
         "the recording ends with:\n{analysis}"
+    );
+}
+
+#[given("the scratch project uses the codetags-lsp plugin through lspmux")]
+fn uses_the_shim(world: &mut CodetagsWorld) {
+    let project = world
+        .claude
+        .project
+        .clone()
+        .expect("the Background made the scratch project");
+    let scratch = project
+        .parent()
+        .expect("the project is in the scratch directory")
+        .to_path_buf();
+    let local = project.join(".codetags").join("local");
+    let lspmux = crate::steps_lspmux::lspmux_binary()
+        .expect("lspmux not found: run `just setup-lspmux`, or set CODETAGS_LSPMUX");
+    std::fs::copy(&lspmux, local.join("bin").join("lspmux")).expect("copy lspmux into the project");
+    // A separate lspmux config (Linux: XDG_CONFIG_HOME; the wrapper sets it
+    // from CODETAGS_LSPMUX_XDG_CONFIG_HOME, so Claude Code keeps its own),
+    // with the socket in a short private runtime directory.
+    let config_home = scratch.join("xdg-config");
+    let runtime = tempfile::Builder::new()
+        .prefix("ct")
+        .tempdir()
+        .expect("create a runtime directory");
+    let codetags = crate::CODETAGS_BIN
+        .get()
+        .expect("run() sets the binary path");
+    let output = Command::new(codetags)
+        .args(["lsp", "setup", "--yes"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .output()
+        .expect("run codetags lsp setup");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success()
+            && stdout.contains(&format!("lspmux config: {}", config_home.display())),
+        "codetags lsp setup:\n{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    world.claude.shim = Some(ShimSetup {
+        plugin: repo_root()
+            .join("tools")
+            .join("claude-plugins")
+            .join("codetags-lsp"),
+        env: vec![
+            ("CODETAGS_LSPMUX_XDG_CONFIG_HOME".into(), config_home),
+            ("CODETAGS_LSP_LOG_DIR".into(), local),
+        ],
+        daemon_log: runtime.path().join("codetags").join("lspmux.log"),
+        _runtime: runtime,
+    });
+}
+
+/// The messages of a recording, parsed.
+fn records(recording: &str) -> Vec<Value> {
+    recording
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record.get("from").is_some())
+        .collect()
+}
+
+#[then(expr = "a {string} request from the client got a non-empty result")]
+fn request_got_result(world: &mut CodetagsWorld, method: String) {
+    let outcome = outcome(world);
+    let recording = outcome
+        .recordings
+        .first()
+        .unwrap_or_else(|| panic!("the session wrote no recording\n{}", outcome.diagnostics));
+    let records = records(recording);
+    let ids: Vec<&Value> = records
+        .iter()
+        .filter(|record| record["from"] == "client" && record["msg"]["method"] == method.as_str())
+        .filter_map(|record| record["msg"].get("id"))
+        .collect();
+    assert!(!ids.is_empty(), "the client sent no {method} request");
+    let answered = records.iter().any(|record| {
+        record["from"] == "server"
+            && record["msg"].get("method").is_none()
+            && record["msg"].get("id").is_some_and(|id| ids.contains(&id))
+            && match &record["msg"]["result"] {
+                Value::Null => false,
+                Value::Array(items) => !items.is_empty(),
+                _ => true,
+            }
+    });
+    assert!(
+        answered,
+        "no {method} request got a non-empty result; ids {ids:?}"
+    );
+}
+
+#[then("the language server received no document notifications")]
+fn server_received_no_documents(world: &mut CodetagsWorld) {
+    let outcome = outcome(world);
+    assert!(
+        !outcome.server_recordings.is_empty(),
+        "no server-side recording"
+    );
+    for recording in &outcome.server_recordings {
+        let documents: Vec<Value> = records(recording)
+            .into_iter()
+            .filter(|record| record["from"] == "client")
+            .filter(|record| {
+                record["msg"]["method"]
+                    .as_str()
+                    .is_some_and(is_document_notification)
+            })
+            .collect();
+        assert!(documents.is_empty(), "the server received {documents:#?}");
+    }
+}
+
+fn is_document_notification(method: &str) -> bool {
+    matches!(
+        method,
+        "textDocument/didOpen"
+            | "textDocument/didChange"
+            | "textDocument/didSave"
+            | "textDocument/didClose"
+    )
+}
+
+#[then("one language server process served the session")]
+fn one_server_process(world: &mut CodetagsWorld) {
+    let outcome = outcome(world);
+    assert_eq!(
+        outcome.server_recordings.len(),
+        1,
+        "server-side recordings: {}",
+        outcome.server_recordings.len()
     );
 }
 

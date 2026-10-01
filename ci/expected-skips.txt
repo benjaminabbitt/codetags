@@ -39,3 +39,6 @@ scenario: lsp/claude-client.feature :: A new file from Write opens when the LSP 
 scenario: lsp/claude-client.feature :: A change made by sed through Bash reaches the server not at all  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
 scenario: lsp/claude-client.feature :: A git checkout through Bash reaches the server not at all  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
 scenario: lsp/claude-client.feature :: The client never sends didChangeWatchedFiles or didClose  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: Headless Claude Code loads the codetags-lsp plugin from --plugin-dir  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: Definitions and references still answer through the shim  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client sends document messages, and the server receives none of them  # needs ANTHROPIC_API_KEY (human: add the secret to enable)

@@ -24,14 +24,25 @@ pub const CAPABILITIES_ENV: &str = "CODETAGS_BDD_CAPABILITIES";
 /// Platform tags restrict a scenario to the named OSes; with none it runs on
 /// every OS. Each capability tag must appear in `capabilities`.
 pub fn scenario_enabled(tags: &[String], os: &str, capabilities: &[String]) -> bool {
-    let platforms: Vec<&str> = tags
+    levels_enabled(&[tags], os, capabilities)
+}
+
+/// [`scenario_enabled`] for tags given per level (feature, rule,
+/// scenario): each level's platform tags narrow the levels above it, so a
+/// rule tagged `@linux` in a feature tagged `@linux @macos` runs on Linux
+/// only. Capability tags are required from every level.
+pub fn levels_enabled(levels: &[&[String]], os: &str, capabilities: &[String]) -> bool {
+    let platform_ok = levels.iter().all(|tags| {
+        let platforms: Vec<&str> = tags
+            .iter()
+            .map(String::as_str)
+            .filter(|tag| PLATFORM_TAGS.contains(tag))
+            .collect();
+        platforms.is_empty() || platforms.contains(&os)
+    });
+    let capabilities_ok = levels
         .iter()
-        .map(String::as_str)
-        .filter(|tag| PLATFORM_TAGS.contains(tag))
-        .collect();
-    let platform_ok = platforms.is_empty() || platforms.contains(&os);
-    let capabilities_ok = tags
-        .iter()
+        .flat_map(|tags| tags.iter())
         .filter(|tag| CAPABILITY_TAGS.contains(&tag.as_str()))
         .all(|tag| capabilities.contains(tag));
     platform_ok && capabilities_ok
@@ -50,14 +61,18 @@ fn capabilities_from_env() -> Vec<String> {
 /// Cucumber's scenario filter: applies [`scenario_enabled`] to the tags of
 /// the feature, the rule, and the scenario, and reports what it leaves out.
 pub(crate) fn filter(feature: &Feature, rule: Option<&Rule>, scenario: &Scenario) -> bool {
-    let tags: Vec<String> = feature
-        .tags
+    let no_tags = Vec::new();
+    let levels = [
+        feature.tags.as_slice(),
+        rule.map_or(no_tags.as_slice(), |rule| rule.tags.as_slice()),
+        scenario.tags.as_slice(),
+    ];
+    let tags: Vec<String> = levels
         .iter()
-        .chain(rule.map(|rule| rule.tags.iter()).into_iter().flatten())
-        .chain(scenario.tags.iter())
+        .flat_map(|tags| tags.iter())
         .cloned()
         .collect();
-    let enabled = scenario_enabled(&tags, std::env::consts::OS, &capabilities_from_env());
+    let enabled = levels_enabled(&levels, std::env::consts::OS, &capabilities_from_env());
     if !enabled {
         eprintln!(
             "bdd: not run here: {}: {} (tags: {})",
@@ -98,6 +113,15 @@ mod tests {
             "linux",
             &strings(&["slow", "mount"])
         ));
+    }
+
+    #[test]
+    fn lower_levels_narrow_platforms() {
+        let feature = strings(&["linux", "macos"]);
+        let rule = strings(&["linux"]);
+        let levels = [feature.as_slice(), rule.as_slice(), &[]];
+        assert!(super::levels_enabled(&levels, "linux", &[]));
+        assert!(!super::levels_enabled(&levels, "macos", &[]));
     }
 
     #[test]

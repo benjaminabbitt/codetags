@@ -7,9 +7,14 @@
   "description": "Claude Code plugins for working on codetags itself, enabled only in this repository (PLAN.md D18).",
   "plugins": [
     {
+      "name": "codetags-lsp",
+      "source": "./codetags-lsp",
+      "description": "rust-analyzer shared through lspmux, with Claude Code as an agent session of the codetags shim (M3, docs/lsp-shim.md)."
+    },
+    {
       "name": "codetags-lsp-recorder",
       "source": "./codetags-lsp-recorder",
-      "description": "rust-analyzer through codetags-lsp record, which logs every LSP message (M3 stage 0, docs/lsp-stage0.md)."
+      "description": "rust-analyzer through codetags-lsp record, which logs every LSP message (M3 stage 0, docs/lsp-stage0.md). Off by default; the stage-0 test loads it with --plugin-dir."
     }
   ]
 }

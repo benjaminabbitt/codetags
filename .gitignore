@@ -2,3 +2,9 @@
 **/*.rs.bk
 .ctxloom/
 .claude/worktrees/
+# Windows wrapper executables and their settings, installed by `just lsp-setup`
+# (docs/lsp-shim.md, V119).
+/tools/vscode/*.exe
+/tools/vscode/*.codetags-lsp.toml
+/tools/claude-plugins/*/scripts/*.exe
+/tools/claude-plugins/*/scripts/*.codetags-lsp.toml

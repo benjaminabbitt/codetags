@@ -107,3 +107,32 @@ Feature: Claude Code's LSP client, observed headless
     Scenario: The client never sends didChangeWatchedFiles or didClose
       Then the client sent no "workspace/didChangeWatchedFiles"
       And the client sent no "textDocument/didClose"
+
+  # M3 stages 1 and 2 (PLAN.md D14-D22): the same client through the agent
+  # shim and lspmux. The rule's setup swaps in the codetags-lsp plugin, gives
+  # lspmux an isolated config (XDG_CONFIG_HOME, so Linux only: on macOS
+  # lspmux's config lives under $HOME, which Claude Code itself needs), and
+  # records both sides: the shim's log is what Claude Code sent and got, and
+  # a recorder between lspmux and rust-analyzer logs what the server got.
+  @linux
+  Rule: Through the shim and lspmux
+
+    Background:
+      Given the scratch project uses the codetags-lsp plugin through lspmux
+      When Claude Code asks the LSP for the definition of "Ledger" in "src/lib.rs"
+      And Claude Code asks the LSP for references to "record" in "src/ledger.rs"
+      And Claude Code appends "// shim: edit tool" to "src/ledger.rs" with the Edit tool, then hovers on "Ledger"
+
+    Scenario: Headless Claude Code loads the codetags-lsp plugin from --plugin-dir
+      Then Claude Code loaded the plugin "codetags-lsp"
+      And Claude Code did not load the plugin "rust-analyzer-lsp"
+
+    Scenario: Definitions and references still answer through the shim
+      Then a "textDocument/definition" request from the client got a non-empty result
+      And a "textDocument/references" request from the client got a non-empty result
+
+    Scenario: The client sends document messages, and the server receives none of them
+      Then after the "definition" the client's document notifications were "didOpen src/lib.rs"
+      And after the "Edit" the client's document notifications were "didChange src/ledger.rs, didSave src/ledger.rs"
+      And the language server received no document notifications
+      And one language server process served the session

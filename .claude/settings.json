@@ -8,7 +8,8 @@
     }
   },
   "enabledPlugins": {
-    "codetags-lsp-recorder@codetags-local": true,
+    "codetags-lsp@codetags-local": true,
+    "codetags-lsp-recorder@codetags-local": false,
     "rust-analyzer-lsp@claude-plugins-official": false
   }
 }

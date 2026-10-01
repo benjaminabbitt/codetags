@@ -513,6 +513,28 @@ Then the recording has no end-of-stream or exit record
       # the recorder was killed before either side closed its stream
 ```
 
+The shim rule of `claude-client.feature` (`@linux`: lspmux's config can be
+moved only through `XDG_CONFIG_HOME`) runs the same client through the
+`codetags-lsp` plugin, the agent shim and lspmux.
+
+```gherkin
+Given the scratch project uses the codetags-lsp plugin through lspmux
+      # loads tools/claude-plugins/codetags-lsp instead of the recorder; a copy
+      # of lspmux in the project's .codetags/local/bin; `codetags lsp setup`
+      # into a scratch XDG_CONFIG_HOME, with the socket in a short private
+      # runtime directory; Claude Code passes CODETAGS_LSPMUX_XDG_CONFIG_HOME
+      # and CODETAGS_LSP_LOG_DIR to the wrapper, so the shim logs the client's
+      # side (lsp-*.jsonl, which the analysis reads) and a recorder between
+      # lspmux and rust-analyzer the server's (server-*.jsonl). The daemon is
+      # killed when the session ends.
+Then a {string} request from the client got a non-empty result
+      # in the shim's log: a response to one of the client's requests of that
+      # method whose result is neither null nor an empty array
+Then the language server received no document notifications
+      # no didOpen, didChange, didSave or didClose in any server-side recording
+Then one language server process served the session   # one server-side recording
+```
+
 ## lspmux setup and doctor (M3 stages 1 and 2)
 
 `codetags lsp setup` and the proxy checks of `codetags doctor`
@@ -622,7 +644,9 @@ to `codetags-lsp serve` and wrapper runs.
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,
-the rule, and the scenario.
+the rule, and the scenario. Each level's platform tags narrow the levels
+above it: a rule tagged `@linux` in a feature tagged `@linux @macos` runs on
+Linux only.
 
 | Tag | Scenario runs only… |
 |---|---|
