@@ -11,6 +11,7 @@ mod child;
 pub mod ran;
 mod steps_cli;
 mod steps_index;
+mod steps_index_go;
 mod steps_model;
 mod steps_mount;
 mod steps_names;

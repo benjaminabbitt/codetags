@@ -179,6 +179,30 @@ Then {string} occurs in {string} on line {int}                # a non-definition
 Then no symbol in the index has a relationship
 Then the document {string} has occurrences of local symbols  # `local N`
 Then filtering local symbols keeps every other occurrence in {string}
+Then every document has a reference within a definition's enclosing range
+      # a non-local, non-definition occurrence inside some definition's enclosing range (brief §4.4: zero edges is a failure)
+Then the reference to {string} on line {int} of {string} lies within the definition of {string}
+      # the innermost definition in that document whose enclosing range contains the reference
+Then the symbol {string} implements {string}                 # an `is_implementation` relationship
+Then the definition of {string} has the canonical name {string}   # codetags-names (D15)
+```
+
+The Go provider runs `scip-go` and `gocallgraph` (`tools/gocallgraph`) from
+`PATH`, over the packages `./...` unless a step names a pattern. A call-graph
+edge's site is where the called name starts; columns are 1-based bytes. Caller
+and callee are named as go/ssa names them, e.g.
+`(example.com/shop/internal/pay.Card).Charge`, and a function literal is
+`<enclosing>$<n>`.
+
+```gherkin
+When the Go provider indexes the fixture {string}
+When the Go provider indexes the packages {string} of the fixture {string}   # one package pattern, relative to the fixture
+When the Go provider indexes a module whose main.go is:     # docstring; a fresh module holding a go.mod and that main.go
+When the Go provider indexes a directory that does not exist
+Then the call-graph edges on line {int} of {string} are:
+      # table with columns: caller | callee | column | kind | algorithm; exactly the edges whose site is on that line
+Then every call site in the call graph, except a function literal's, starts an occurrence in the index
+      # a site whose source text starts with `func` is a function literal's
 ```
 
 ## Watcher and coalescer

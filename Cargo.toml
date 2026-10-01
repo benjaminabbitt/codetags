@@ -57,6 +57,9 @@ winfsp = "0.13"
 winfsp-sys = "0.12"
 # The version winfsp 0.13 uses, for registry and DLL loading in the backend.
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Storage_FileSystem"] }
+# gocallgraph's JSON lines (P1.5).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -507,6 +507,8 @@ version = "0.1.0"
 dependencies = [
  "protobuf",
  "scip",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

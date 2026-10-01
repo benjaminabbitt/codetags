@@ -10,3 +10,27 @@
 # ranges landed on 2025-11-28 (rust-lang/rust-analyzer#21141; V62).
 install = "rustup-component"
 toolchain = "1.96"
+
+[go]
+# The Go toolchain scip-go and gocallgraph build with and load packages
+# through. CI installs it with actions/setup-go; `just setup-providers`
+# checks that `go version` reports this minor version. Its minor must equal
+# the `go` line of tools/gocallgraph/go.mod (a unit test in codetags-ingest
+# checks this; x/tools v0.50.0 needs Go 1.26).
+version = "1.26.8"
+
+[scip-go]
+# `go install <module>/cmd/scip-go@<version>`. The module moved from
+# github.com/sourcegraph/scip-go to github.com/scip-code/scip-go, and v0.2.7
+# declares the new path, so the old one no longer installs (V76).
+install = "go-install"
+module = "github.com/scip-code/scip-go"
+version = "v0.2.7"
+
+[gocallgraph]
+# tools/gocallgraph, built from its own go.mod and go.sum with
+# `go install -C tools/gocallgraph .`. x-tools is the golang.org/x/tools
+# version that go.mod requires (BSD-3-Clause; nothing is linked into Rust).
+install = "go-install-local"
+path = "tools/gocallgraph"
+x-tools = "v0.50.0"

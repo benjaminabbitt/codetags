@@ -7,6 +7,7 @@
 //! with no occurrences for sources that declare functions are all errors, and
 //! each carries the provider's stderr.
 
+pub mod go;
 pub mod rust;
 pub mod scip;
 

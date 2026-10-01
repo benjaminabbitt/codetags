@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use codetags_ingest::provider::go::CallEdge;
 use codetags_ingest::provider::rust::RustAnalyzer;
 use codetags_ingest::provider::scip::{Document, Occurrence, ScipIndex, SymbolKind};
 use cucumber::{then, when};
@@ -16,13 +17,18 @@ use regex::Regex;
 use crate::CodetagsWorld;
 
 /// The outcome of a provider run: the decoded index, or the error's message.
-type RunOutcome = Arc<Result<ScipIndex, String>>;
+pub(crate) type RunOutcome = Arc<Result<ScipIndex, String>>;
 
 /// State the index steps share within one scenario.
 #[derive(Debug, Default)]
 pub struct IndexState {
     /// The last provider run.
-    run: Option<RunOutcome>,
+    pub(crate) run: Option<RunOutcome>,
+    /// The call graph of the last provider run, for providers that write one
+    /// (Go, `steps_index_go`).
+    pub(crate) call_graph: Option<Arc<Vec<CallEdge>>>,
+    /// The root the last Go provider run indexed.
+    pub(crate) root: Option<PathBuf>,
 }
 
 /// Fixture runs, shared by the scenarios of one process: the index of a
@@ -34,7 +40,7 @@ fn fixture_runs() -> &'static Mutex<HashMap<String, RunOutcome>> {
 
 /// `tests/fixtures/<name>`, without `..` components (the provider gets an
 /// absolute, normalized root on every OS).
-fn fixture(name: &str) -> PathBuf {
+pub(crate) fn fixture(name: &str) -> PathBuf {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -54,7 +60,7 @@ fn run_rust(root: &Path, scratch: &Path) -> RunOutcome {
     )
 }
 
-fn index(world: &CodetagsWorld) -> &ScipIndex {
+pub(crate) fn index(world: &CodetagsWorld) -> &ScipIndex {
     let run = world
         .index
         .run
@@ -66,7 +72,7 @@ fn index(world: &CodetagsWorld) -> &ScipIndex {
     }
 }
 
-fn document<'a>(index: &'a ScipIndex, path: &str) -> &'a Document {
+pub(crate) fn document<'a>(index: &'a ScipIndex, path: &str) -> &'a Document {
     index
         .documents
         .iter()
@@ -75,14 +81,14 @@ fn document<'a>(index: &'a ScipIndex, path: &str) -> &'a Document {
 }
 
 /// The descriptors of a global SCIP symbol; `None` for a local.
-fn descriptors(symbol: &str) -> Option<&str> {
+pub(crate) fn descriptors(symbol: &str) -> Option<&str> {
     if symbol.starts_with("local ") {
         return None;
     }
     symbol.splitn(5, ' ').nth(4)
 }
 
-fn definition<'a>(index: &'a ScipIndex, name: &str) -> &'a Occurrence {
+pub(crate) fn definition<'a>(index: &'a ScipIndex, name: &str) -> &'a Occurrence {
     index
         .documents
         .iter()
