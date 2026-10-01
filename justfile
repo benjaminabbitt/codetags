@@ -17,11 +17,18 @@ setup:
 
 # Pinned SCIP providers from providers.toml (P1).
 # Idempotent. Rust: the rust-analyzer component of the toolchain that
-# providers.toml pins (the one in rust-toolchain.toml).
+# providers.toml pins (the one in rust-toolchain.toml). Go: needs the pinned
+# Go minor version on PATH (CI: actions/setup-go), then `go install`s scip-go
+# and tools/gocallgraph into `go env GOPATH`/bin, which must be on PATH.
 setup-providers:
     rustup toolchain install
     rustup component add rust-analyzer --toolchain "$(sed -n '/^\[rust-analyzer\]/,/^\[/s/^toolchain *= *"\(.*\)".*/\1/p' providers.toml)"
     rust-analyzer --version
+    @want="$(sed -n '/^\[go\]/,/^\[/s/^version *= *"\([0-9]*\.[0-9]*\).*/\1/p' providers.toml)"; if go version | grep -q "go$want[. ]"; then go version; else echo "setup-providers: providers.toml pins Go $want; found: $(go version 2>&1)"; exit 1; fi
+    go install "$(sed -n '/^\[scip-go\]/,/^\[/s/^module *= *"\(.*\)".*/\1/p' providers.toml)/cmd/scip-go@$(sed -n '/^\[scip-go\]/,/^\[/s/^version *= *"\(.*\)".*/\1/p' providers.toml)"
+    go install -C tools/gocallgraph .
+    @command -v scip-go >/dev/null && command -v gocallgraph >/dev/null || { echo "setup-providers: add $(go env GOPATH)/bin to PATH"; exit 1; }
+    scip-go --version
     @echo "setup-providers: ready"
 
 # --- the green light -----------------------------------------------------

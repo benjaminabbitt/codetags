@@ -258,6 +258,19 @@ jobs:
 
       - uses: extractions/setup-just@v2
 
+      # The Go toolchain for scip-go and tools/gocallgraph (P1.5), at the
+      # version providers.toml pins. setup-go puts `go env GOPATH`/bin, where
+      # `just setup-providers` installs both, on PATH.
+      - name: Go version from providers.toml
+        id: go
+        shell: bash
+        run: echo "version=$(sed -n '/^\[go\]/,/^\[/s/^version *= *"\(.*\)".*/\1/p' providers.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache-dependency-path: tools/gocallgraph/go.sum
+
       - name: just setup-providers
         shell: bash
         run: just setup-providers
