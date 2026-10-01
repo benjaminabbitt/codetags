@@ -686,6 +686,7 @@ This no longer gates anything (D2).
 | `override-check` | Fails while `.cargo/config.toml` holds a local override (a `dev-tagma` block or any `[patch]`) |
 | `license-check` | `cargo deny check licenses bans` (rule 12) |
 | `fmt` / `fmt-check` / `lint` / `test` | cargo equivalents; clippy with `-D warnings` |
+| `lint-cross` | `lint` for the `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` targets from any host; fails with the `rustup target add` hint if a target is missing. Not part of `check` (CI lints natively) |
 | `bdd` | Features that need no mount, provider, or privilege |
 | `tags-check` | Validates this repo's `.codetags/tags` |
 | `test-mount` | View, plugin, and mount-tagging features against this OS's live backend |

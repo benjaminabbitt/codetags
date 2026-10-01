@@ -51,6 +51,13 @@ lint:
 duckdb-verify TARGET="":
     sh ci/duckdb-verify.sh {{TARGET}}
 
+# Clippy for the Windows and macOS targets, from any host, to catch cfg-gated
+# code before CI does. Not part of `check`: CI lints natively on those OSes.
+lint-cross:
+    @for target in x86_64-pc-windows-msvc aarch64-apple-darwin; do rustup target list --installed | grep -qx "$target" || { echo "lint-cross: target $target is not installed; add it with: rustup target add $target"; exit 1; }; done
+    cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+    cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
+
 # Licence boundaries (PLAN.md §0.12, D9); policy in deny.toml.
 license-check:
     cargo deny check licenses bans
