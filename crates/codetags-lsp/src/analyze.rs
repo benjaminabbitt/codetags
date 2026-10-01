@@ -2,7 +2,9 @@
 //! [`crate::record`] writes), aimed at the questions stage 0 must answer
 //! (M3, D16–D18): what the client sends in `initialize`, which document-sync
 //! notifications it sends and when, how it answers the server's requests,
-//! and how long its own requests take.
+//! and how long its own requests take. Given step marks (one JSON line per
+//! scripted step: `{"ts_ms": <Unix ms>, "step": "<name>"}`), it also lists
+//! what the client sent during each step.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -45,6 +47,7 @@ const CAPABILITY_PATHS: [&str; 12] = [
 /// One message record from the log.
 #[derive(Debug)]
 struct Message {
+    ts_ms: u64,
     t_ms: f64,
     from: String,
     kind: String,
@@ -87,8 +90,42 @@ impl Exchange<'_> {
     }
 }
 
-/// Summarizes the JSON-lines recording `log` as Markdown-ish text.
-pub fn analyze(log: &str) -> Result<String, String> {
+/// One scripted step: it starts at `ts_ms` and lasts until the next mark.
+#[derive(Debug)]
+struct Mark {
+    ts_ms: u64,
+    step: String,
+}
+
+fn parse_marks(marks: &str) -> Result<Vec<Mark>, String> {
+    let mut parsed = Vec::new();
+    for (number, line) in marks.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: Value = serde_json::from_str(line)
+            .map_err(|error| format!("marks line {}: not JSON: {error}", number + 1))?;
+        match (record["ts_ms"].as_u64(), record["step"].as_str()) {
+            (Some(ts_ms), Some(step)) => parsed.push(Mark {
+                ts_ms,
+                step: step.to_string(),
+            }),
+            _ => {
+                return Err(format!(
+                    "marks line {}: needs a numeric `ts_ms` and a string `step`",
+                    number + 1
+                ));
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+/// Summarizes the JSON-lines recording `log` as Markdown-ish text. With
+/// `marks` (JSON lines of `ts_ms` and `step`), it also lists the client's
+/// messages during each step.
+pub fn analyze(log: &str, marks: Option<&str>) -> Result<String, String> {
+    let marks = marks.map(parse_marks).transpose()?;
     let mut messages = Vec::new();
     let mut events = Vec::new();
     for (number, line) in log.lines().enumerate() {
@@ -99,6 +136,7 @@ pub fn analyze(log: &str) -> Result<String, String> {
             .map_err(|error| format!("line {}: not JSON: {error}", number + 1))?;
         match record["from"].as_str() {
             Some(from) => messages.push(Message {
+                ts_ms: record["ts_ms"].as_u64().unwrap_or(0),
                 t_ms: record["t_ms"].as_f64().unwrap_or(0.0),
                 from: from.to_string(),
                 kind: record["kind"].as_str().unwrap_or("invalid").to_string(),
@@ -114,6 +152,10 @@ pub fn analyze(log: &str) -> Result<String, String> {
     let server_requests = exchanges(&messages, "server");
     document_sync(&mut out, &messages, root.as_deref());
     server_to_client(&mut out, &server_requests);
+    answers_by_method(&mut out, &server_requests);
+    if let Some(marks) = &marks {
+        per_step(&mut out, &messages, marks, root.as_deref());
+    }
     client_to_server(&mut out, &client_requests);
     notification_counts(&mut out, &messages);
     gaps(&mut out, &messages, &server_requests);
@@ -226,24 +268,50 @@ fn initialize(out: &mut String, messages: &[Message]) -> Option<String> {
             result["serverInfo"]
         );
     }
-    params["rootUri"].as_str().map(str::to_string)
+    params["rootUri"]
+        .as_str()
+        .or_else(|| params["workspaceFolders"][0]["uri"].as_str())
+        .map(str::to_string)
 }
 
 fn lookup<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(value, |value, key| value.get(key))
 }
 
+/// `uri` relative to the workspace root, if it is under it.
+fn short(root: Option<&str>, uri: &str) -> String {
+    match root {
+        Some(root) => uri
+            .strip_prefix(root)
+            .map(|rest| rest.trim_start_matches('/').to_string())
+            .unwrap_or_else(|| uri.to_string()),
+        None => uri.to_string(),
+    }
+}
+
+/// The `changes` of a `workspace/didChangeWatchedFiles`, as `type:uri` items.
+fn watched_changes(params: &Value, root: Option<&str>) -> String {
+    params["changes"]
+        .as_array()
+        .map(|changes| {
+            changes
+                .iter()
+                .map(|change| {
+                    format!(
+                        "{}:{}",
+                        change_type(&change["type"]),
+                        short(root, change["uri"].as_str().unwrap_or("?"))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
 fn document_sync(out: &mut String, messages: &[Message], root: Option<&str>) {
     let _ = writeln!(out, "## Document sync (client to server)\n");
-    let short = |uri: &str| -> String {
-        match root {
-            Some(root) => uri
-                .strip_prefix(root)
-                .map(|rest| rest.trim_start_matches('/').to_string())
-                .unwrap_or_else(|| uri.to_string()),
-            None => uri.to_string(),
-        }
-    };
+    let short = |uri: &str| short(root, uri);
     let mut per_document: BTreeMap<String, [usize; 4]> = BTreeMap::new();
     let mut any = false;
     for message in messages
@@ -271,22 +339,7 @@ fn document_sync(out: &mut String, messages: &[Message], root: Option<&str>) {
                     changes.len()
                 )
             }
-            "workspace/didChangeWatchedFiles" => params["changes"]
-                .as_array()
-                .map(|changes| {
-                    changes
-                        .iter()
-                        .map(|change| {
-                            format!(
-                                "{}:{}",
-                                change_type(&change["type"]),
-                                short(change["uri"].as_str().unwrap_or("?"))
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .unwrap_or_default(),
+            "workspace/didChangeWatchedFiles" => watched_changes(params, root),
             _ => uri.clone(),
         };
         let slot = match message.method() {
@@ -391,6 +444,92 @@ fn server_to_client(out: &mut String, requests: &[Exchange<'_>]) {
                 .latency_ms()
                 .map_or("-".to_string(), |ms| format!("{ms:.0} ms"))
         );
+    }
+    let _ = writeln!(out);
+}
+
+/// Each server-to-client method with the client's distinct answers, in the
+/// order they first appear: unlike the table, stable across sessions.
+fn answers_by_method(out: &mut String, requests: &[Exchange<'_>]) {
+    let _ = writeln!(out, "## Client answers by method\n");
+    let mut methods: Vec<(&str, Vec<String>)> = Vec::new();
+    for exchange in requests {
+        let method = exchange.request.method();
+        let index = match methods.iter().position(|(seen, _)| *seen == method) {
+            Some(index) => index,
+            None => {
+                methods.push((method, Vec::new()));
+                methods.len() - 1
+            }
+        };
+        let answer = exchange.answer();
+        if !methods[index].1.contains(&answer) {
+            methods[index].1.push(answer);
+        }
+    }
+    if methods.is_empty() {
+        let _ = writeln!(out, "None.");
+    }
+    for (method, answers) in methods {
+        let _ = writeln!(out, "- `{method}`: {}", answers.join(" | "));
+    }
+    let _ = writeln!(out);
+}
+
+/// What the client sent during each step: its document-sync notifications
+/// in order, then the distinct methods of its requests and of its other
+/// notifications. Messages before the first mark belong to `startup`.
+fn per_step(out: &mut String, messages: &[Message], marks: &[Mark], root: Option<&str>) {
+    let _ = writeln!(
+        out,
+        "## Client messages per step\n\nEach step lasts from its mark to the next; `startup` is everything before the first.\n"
+    );
+    let mut steps: Vec<(&str, u64)> = vec![("startup", 0)];
+    steps.extend(marks.iter().map(|mark| (mark.step.as_str(), mark.ts_ms)));
+    for (index, (step, start)) in steps.iter().enumerate() {
+        let end = steps.get(index + 1).map_or(u64::MAX, |next| next.1);
+        let mut sync = Vec::new();
+        let mut requests: Vec<String> = Vec::new();
+        let mut other: Vec<String> = Vec::new();
+        for message in messages
+            .iter()
+            .filter(|m| m.from == "client" && m.ts_ms >= *start && m.ts_ms < end)
+        {
+            let method = message.method();
+            let params = &message.msg["params"];
+            if SYNC_METHODS.contains(&method) {
+                let name = method.rsplit('/').next().unwrap_or(method);
+                let target = if method == "workspace/didChangeWatchedFiles" {
+                    watched_changes(params, root)
+                } else {
+                    short(root, params["textDocument"]["uri"].as_str().unwrap_or("?"))
+                };
+                sync.push(format!("{name} {target}"));
+            } else {
+                let list = if message.kind == "request" {
+                    &mut requests
+                } else if message.kind == "notification" {
+                    &mut other
+                } else {
+                    continue;
+                };
+                if !list.iter().any(|seen| seen == method) {
+                    list.push(method.to_string());
+                }
+            }
+        }
+        for (what, items) in [
+            ("sync", sync),
+            ("requests", requests),
+            ("other notifications", other),
+        ] {
+            let items = if items.is_empty() {
+                "none".to_string()
+            } else {
+                items.join(", ")
+            };
+            let _ = writeln!(out, "- `{step}` {what}: {items}");
+        }
     }
     let _ = writeln!(out);
 }
@@ -581,7 +720,7 @@ mod tests {
 
     #[test]
     fn reports_initialize_params_and_capabilities() {
-        let report = analyze(&sample()).unwrap();
+        let report = analyze(&sample(), None).unwrap();
         assert!(report.contains("- `rootUri`: null"), "{report}");
         assert!(
             report.contains(r#"- `workspaceFolders`: [{"name":"w","uri":"file:///w"}]"#),
@@ -599,17 +738,19 @@ mod tests {
 
     #[test]
     fn reports_document_sync_with_times() {
-        let report = analyze(&sample()).unwrap();
+        let report = analyze(&sample(), None).unwrap();
         assert!(
             report
-                .contains("- 0.060s `textDocument/didOpen` file:///w/src/a.rs version 1 (8 bytes)"),
+                // rootUri is null, so URIs are relative to the first
+                // workspace folder.
+                .contains("- 0.060s `textDocument/didOpen` src/a.rs version 1 (8 bytes)"),
             "{report}"
         );
     }
 
     #[test]
     fn pairs_server_requests_with_the_client_answers_by_direction() {
-        let report = analyze(&sample()).unwrap();
+        let report = analyze(&sample(), None).unwrap();
         assert!(
             report.contains("| 0.070s | 0 | `window/workDoneProgress/create` | error -32601 Method not found | 1 ms |"),
             "{report}"
@@ -624,7 +765,7 @@ mod tests {
 
     #[test]
     fn reports_client_request_latencies() {
-        let report = analyze(&sample()).unwrap();
+        let report = analyze(&sample(), None).unwrap();
         assert!(
             report.contains("| 0.090s | 2 | `textDocument/hover` | result null | 40 ms |"),
             "{report}"
@@ -637,7 +778,7 @@ mod tests {
 
     #[test]
     fn gives_verdicts_on_the_reported_gaps() {
-        let report = analyze(&sample()).unwrap();
+        let report = analyze(&sample(), None).unwrap();
         for expected in [
             "- no `workspace.didChangeWatchedFiles` capability: CONFIRMED",
             "- `rootUri: null`: CONFIRMED",
@@ -655,6 +796,115 @@ mod tests {
 
     #[test]
     fn rejects_lines_that_are_not_json() {
-        assert!(analyze("{}\nnot json").unwrap_err().starts_with("line 2"));
+        assert!(
+            analyze("{}\nnot json", None)
+                .unwrap_err()
+                .starts_with("line 2")
+        );
+    }
+
+    #[test]
+    fn lists_each_methods_distinct_answers() {
+        let log = [
+            line(
+                1.0,
+                "server",
+                "request",
+                r#"{"id":5,"method":"client/registerCapability","params":{}}"#,
+            ),
+            line(2.0, "client", "response", r#"{"id":5,"result":null}"#),
+            line(
+                3.0,
+                "server",
+                "request",
+                r#"{"id":6,"method":"client/registerCapability","params":{}}"#,
+            ),
+            line(4.0, "client", "response", r#"{"id":6,"result":null}"#),
+            line(
+                5.0,
+                "server",
+                "request",
+                r#"{"id":7,"method":"workspace/configuration","params":{}}"#,
+            ),
+            line(
+                6.0,
+                "client",
+                "response",
+                r#"{"id":7,"error":{"code":-32601,"message":"nope"}}"#,
+            ),
+            line(
+                7.0,
+                "server",
+                "request",
+                r#"{"id":8,"method":"workspace/configuration","params":{}}"#,
+            ),
+        ]
+        .join("\n");
+        let report = analyze(&log, None).unwrap();
+        assert!(
+            report.contains("- `client/registerCapability`: result null\n"),
+            "{report}"
+        );
+        assert!(
+            report.contains("- `workspace/configuration`: error -32601 nope | no answer\n"),
+            "{report}"
+        );
+    }
+
+    /// A log line with a Unix time as well as a session time.
+    fn timed(ts_ms: u64, from: &str, kind: &str, msg: &str) -> String {
+        format!(r#"{{"ts_ms":{ts_ms},"t_ms":0,"from":"{from}","kind":"{kind}","msg":{msg}}}"#)
+    }
+
+    #[test]
+    fn buckets_client_messages_by_step_mark() {
+        let log = [
+            timed(100, "client", "request", r#"{"id":1,"method":"initialize","params":{"rootUri":null,"workspaceFolders":[{"uri":"file:///w","name":"w"}],"capabilities":{}}}"#),
+            timed(110, "client", "notification", r#"{"method":"initialized","params":{}}"#),
+            timed(200, "client", "notification", r#"{"method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///w/src/a.rs","version":0,"text":""}}}"#),
+            timed(210, "client", "request", r#"{"id":2,"method":"textDocument/hover","params":{}}"#),
+            timed(220, "client", "request", r#"{"id":3,"method":"textDocument/hover","params":{}}"#),
+            timed(230, "server", "request", r#"{"id":9,"method":"workspace/configuration","params":{}}"#),
+            timed(300, "client", "notification", r#"{"method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///w/src/a.rs","version":1},"contentChanges":[{"text":"x"}]}}"#),
+            timed(310, "client", "notification", r#"{"method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"file:///w/src/b.rs","type":1}]}}"#),
+            timed(320, "client", "notification", r#"{"method":"$/cancelRequest","params":{"id":3}}"#),
+        ]
+        .join("\n");
+        let marks = r#"{"ts_ms":150,"step":"hover"}
+{"ts_ms":250,"step":"edit"}
+{"ts_ms":400,"step":"quiet"}"#;
+        let report = analyze(&log, Some(marks)).unwrap();
+        for expected in [
+            "- `startup` sync: none\n",
+            "- `startup` requests: initialize\n",
+            "- `startup` other notifications: initialized\n",
+            "- `hover` sync: didOpen src/a.rs\n",
+            "- `hover` requests: textDocument/hover\n",
+            "- `hover` other notifications: none\n",
+            "- `edit` sync: didChange src/a.rs, didChangeWatchedFiles created:src/b.rs\n",
+            "- `edit` requests: none\n",
+            "- `edit` other notifications: $/cancelRequest\n",
+            "- `quiet` sync: none\n",
+        ] {
+            assert!(
+                report.contains(expected),
+                "missing {expected:?} in\n{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn has_no_step_section_without_marks() {
+        let report = analyze(&sample(), None).unwrap();
+        assert!(!report.contains("per step"), "{report}");
+    }
+
+    #[test]
+    fn rejects_marks_that_are_not_json_or_lack_fields() {
+        assert!(
+            analyze(&sample(), Some("{\"ts_ms\":1}"))
+                .unwrap_err()
+                .starts_with("marks line 1")
+        );
     }
 }

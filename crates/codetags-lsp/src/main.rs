@@ -45,7 +45,22 @@ enum Command {
     Analyze {
         /// A log written by `record`.
         log: PathBuf,
+        /// Step marks, one JSON object per line: `{"ts_ms": <Unix ms>,
+        /// "step": "<name>"}`. Adds what the client sent during each step.
+        #[arg(long)]
+        marks: Option<PathBuf>,
     },
+}
+
+/// Reads `path` as text, reporting a failure on stderr.
+fn read_text(path: &std::path::Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(error) => {
+            eprintln!("codetags-lsp: cannot read {}: {error}", path.display());
+            None
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -70,15 +85,16 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::Analyze { log } => {
-            let text = match std::fs::read_to_string(&log) {
-                Ok(text) => text,
-                Err(error) => {
-                    eprintln!("codetags-lsp: cannot read {}: {error}", log.display());
-                    return ExitCode::from(FAILURE);
-                }
+        Command::Analyze { log, marks } => {
+            let Some(text) = read_text(&log) else {
+                return ExitCode::from(FAILURE);
             };
-            match codetags_lsp::analyze::analyze(&text) {
+            let marks = match marks.as_deref().map(read_text) {
+                None => None,
+                Some(Some(marks)) => Some(marks),
+                Some(None) => return ExitCode::from(FAILURE),
+            };
+            match codetags_lsp::analyze::analyze(&text, marks.as_deref()) {
                 Ok(report) => {
                     print!("{report}");
                     ExitCode::SUCCESS
