@@ -34,7 +34,7 @@ Each item has the default currently built or proposed.
 
 | # | Decision | Default |
 |---|---|---|
-| 3 | The lspmux questions: (a) only editors send document contents; (b) multi-user Windows in scope; (c) who writes the upstream `applyEdit` PR; (d) `codetags lsp setup` writing lspmux config; (e) pin rev `18861f9` | (a) yes; (b) out of v1; (c) you, gap accepted until then; (d) only via that explicit command; (e) pin now |
+| 3 | The lspmux questions: (a) and the transport are **decided** (D16, D17); still open are (b) multi-user Windows scope, (c) who writes the upstream `applyEdit` PR, (d) `codetags lsp setup` writing lspmux config, (e) pin rev `18861f9` | (b) out of v1; (c) you, gap accepted until then; (d) only via that explicit command; (e) pin now |
 | 4 | Security: the lspmux handshake names the program to run, so any local user who can reach the loopback port can run programs as you. A Unix socket in a 0700 directory avoids it on Unix, as a config choice. | — |
 | 5 | Naming (PLAN §2.7): impl blocks are containers; `+fn`, `+field`, `+const` and `+static` suffixes only on a collision; Rust names start with the crate; the standard library and dependencies get their crate too; value precedence on a collision is fn, then const, static, field | as listed |
 | 6 | Rust trait and `dyn` expansion: rust-analyzer emits no `is_implementation` relationships (V64), while Go, TS and Python do. Options: match by name, ask LSP for implementations, or accept the gap. | `declared` targets only |

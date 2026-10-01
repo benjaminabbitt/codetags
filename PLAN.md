@@ -71,10 +71,13 @@ of tagma's `PLAN.md`:
 | D13 | **Change notifier** (§2.12). **DRAFT, for review.** Watcher events become tagged items. Per-consumer filters, written as tagma postfix queries over file name, extension, metadata and tags, decide what each language server is sent. | brief §4.3 "Routing" |
 | D14 | **Zero changes to lspmux, if at all possible** (2026-10-01). Use upstream lspmux unmodified, as an installed and pinned tool rather than a vendored fork, and build our pieces around it: shim, watcher and config. Its transport stays as upstream has it: loopback TCP by default, which is fine. If lspmux can't meet a requirement unmodified, the requirement becomes an upstream PR or an accepted gap. A local change is the last resort, only when we must; lspmux is mature enough that it probably won't come to that. P3 is being re-planned from an analysis (`docs/proxy-zero-change.md`). | Overrides brief §2 "Proxy base: fork or extend lspmux" and "local transport only: Unix socket", C1, and D9's lspx carve-out (no EUPL code in this repo). Brief §2's "never listen on a non-loopback TCP port" still holds, through upstream's default config. |
 | D15 | **No escaping in names or paths** (2026-10-01). Paths use raw tagma syntax on every OS; values that need it are quoted the tagma way (`"..."`). The only character no filesystem allows in a name, `/`, is kept out of values by data design, not escaped. On Windows, the characters Win32 forbids go through the Cygwin/MSYS2/WSL private-use mapping, which the WinFsp backend and the Windows static tree decode and encode (⚠ verified in S4). | Supersedes §2.7's percent-encoded path profile, C6 and O-4. |
+| D16 | **Agent sessions never own documents** (2026-10-01). For an agent session such as Claude Code, the shim drops `textDocument/didOpen`, `didChange` and `didClose`, so the shared server reads agent-visible files from disk, and the watcher keeps it current through `didChangeWatchedFiles`. Only editor sessions (VS Code) send buffer contents. This answers lspmux question (a), and sidesteps Claude Code's reported stale-`didChange` bug. | brief §4.2 "Document ownership": agent sessions should not open documents |
+| D17 | **lspmux listens on a Unix socket in a 0700 directory on Linux and macOS**, and on loopback TCP on Windows (2026-10-01). This is a config choice; lspmux is unchanged (D14). It closes the "any local user can make the daemon run programs" hole (V36, O-20) everywhere except Windows. | refines D14 and C1 |
+| D18 | **The Claude Code integration is project-scoped:** a plugin in this repo, enabled only here; the official `rust-analyzer-lsp` plugin is disabled for this project and nowhere else. **Stage 0 comes first:** record Claude Code's real LSP traffic for one session, before the shim's design depends on the reported client bugs. | M3 |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
-The planning agent derived these from D1–D15 and from research. Each is a default the human may overturn.
+The planning agent derived these from D1–D18 and from research. Each is a default the human may overturn.
 
 - **C1. Transport.** *Superseded by D14:* upstream lspmux's transport, loopback TCP by default. Cross-machine use goes through SSH TCP port forwarding (`ssh -L`), which works between any of the three OSes.
 - **C2. Watcher.**
@@ -663,7 +666,7 @@ This no longer gates anything (D2).
 | O-17 | Recursion-guard parameters: half-life, threshold, grace window, quiet level; and what a tripped actor sees. | 1 s, 20, 2 s, *T*/4; EPERM plus `@pending` and `codetags ops pending` |
 | O-18 | Whether mass content writes (e.g. `sed -i` over a query directory) are held like deletes. | counted and journaled, never held |
 | O-19 | D11–D13 are drafts: confirm the operation mapping, the guard, and the notifier before their [SPEC] features are written. | none; the human reviews |
-| O-20 | Loopback TCP can be reached by other local users on shared machines. A shared-secret handshake would close that, but would need an lspmux change. | accepted (D14) |
+| O-20 | Loopback TCP can be reached by other local users on shared machines. | **resolved by D17** on Linux and macOS; on Windows, accepted (D14) |
 
 ## 17. Risks
 
