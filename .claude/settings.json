@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "codetags-local": {
+      "source": {
+        "source": "directory",
+        "path": "./tools/claude-plugins"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "codetags-lsp-recorder@codetags-local": true,
+    "rust-analyzer-lsp@claude-plugins-official": false
+  }
+}
