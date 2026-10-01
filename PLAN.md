@@ -356,7 +356,7 @@ codetags/
 | Dependency | Pin | Notes |
 |---|---|---|
 | Rust | `rust-toolchain.toml` 1.96.x, edition 2024 | 1.96.1 on the dev host |
-| tagma-core | git `benjaminabbitt/tagma` at the full SHA of `9a2b044` | Local override: `just dev-tagma PATH` writes an ignored `.cargo/config.toml` `[patch]`. ⚠ tagma has **no LICENSE file**; it needs one before codetags' first release (O-1). |
+| tagma-core | git `benjaminabbitt/tagma` at the full SHA of `b1ae808`, the first BSD-3-Clause commit | Local override: `just dev-tagma PATH` writes an ignored `.cargo/config.toml` `[patch]`. |
 | duckdb | `~1.10506` (DuckDB 1.5.6), feature `bundled` | Static build, so no runtime DLL. Windows needs a short `CARGO_TARGET_DIR` and `+crt-static` (V8). |
 | cucumber | 0.23 | Latest as of 2026-09-30; tagma pins 0.21.1 |
 | fuser | 0.18 | V11 |
@@ -557,7 +557,7 @@ This no longer gates anything (D2).
 
 | ID | Question | Default |
 |---|---|---|
-| O-1 | **Resolved by D9.** Still open outside this repo: **tagma has no LICENSE**, and needs one before codetags' first release (BSD-3 would match). WinFsp's FLOSS exception does cover BSD-3 (V14), on two conditions:<br>• we show its attribution notice;<br>• we never link or distribute it with proprietary software.<br>So a proprietary downstream fork would lose the exception for the WinFsp backend. That is their concern, not ours. | human action in the tagma repo |
+| O-1 | **Resolved by D9.** tagma is now BSD-3-Clause, as of tagma `b1ae808` (2026-10-01). WinFsp's FLOSS exception does cover BSD-3 (V14), on two conditions:<br>• we show its attribution notice;<br>• we never link or distribute it with proprietary software.<br>So a proprietary downstream fork would lose the exception for the WinFsp backend. That is their concern, not ours. | resolved |
 | O-2 | A local-only personal tag file. | shared file only |
 | O-3 | Add `remove_item` to tagma (now on the tagging hot path). | clone-and-apply per write; revisit if the P6.3 benchmark fails |
 | O-4 | Upstream the path profile into tagma's SPEC. | codetags-local |
