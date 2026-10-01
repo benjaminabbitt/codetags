@@ -696,7 +696,9 @@ Given a scratch checkout of the Rust fixture with this repo's LSP wiring
       # tools/lsp/, tools/vscode/, tools/claude-plugins/codetags-lsp/ and
       # .vscode/settings.json, without the gitignored Windows wrappers; `git
       # init` and one commit (pinned identity, core.autocrlf=false), so `git
-      # restores` works. Makes the isolated home if no step did.
+      # restores` works. On Linux and macOS the checkout's path is
+      # canonical (macOS's temporary directory is behind a symlink, V132).
+      # Makes the isolated home if no step did.
 Given lspmux is installed in the scratch checkout
       # copies the pinned lspmux (CODETAGS_LSPMUX, as for @lspmux) to
       # .codetags/local/bin/lspmux[.exe], where `just setup-lspmux` puts it

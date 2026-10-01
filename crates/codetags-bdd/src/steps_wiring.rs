@@ -96,7 +96,17 @@ fn a_scratch_checkout(world: &mut CodetagsWorld) {
     if world.lspmux.home.is_none() {
         an_isolated_home(world);
     }
-    let checkout = world.scratch().join("checkout");
+    // Spelled canonically on Linux and macOS, as a checkout under the home
+    // directory is: macOS's temporary directory is reached through the
+    // /var -> /private/var symlink, and there rust-analyzer saw no change on
+    // disk at all (V132).
+    let scratch = world.scratch().to_path_buf();
+    let scratch = if cfg!(unix) {
+        canonical(&scratch)
+    } else {
+        scratch
+    };
+    let checkout = scratch.join("checkout");
     let repo = repo_root();
     crate::steps_claude::copy_tree(&repo.join("tests").join("fixtures").join("rust"), &checkout);
     for part in [
