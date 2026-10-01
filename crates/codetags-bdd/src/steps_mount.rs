@@ -1,6 +1,6 @@
 //! Steps for live mounts. The Linux FUSE spike (P0b S1) is the first backend.
 
-use cucumber::{given, then, when};
+use cucumber::{given, then};
 
 use crate::CodetagsWorld;
 
@@ -31,7 +31,9 @@ fn non_setuid_fusermount3_first_on_path(world: &mut CodetagsWorld) {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::*;
+    use cucumber::{given, when};
+
+    use crate::CodetagsWorld;
 
     #[given(expr = "the hello filesystem is mounted on an empty directory")]
     fn hello_is_mounted(world: &mut CodetagsWorld) {
