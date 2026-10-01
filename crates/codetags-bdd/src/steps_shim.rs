@@ -24,14 +24,14 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A running session: a shim (or wrapper) process and what it said.
 #[derive(Debug)]
-struct Session {
+pub(crate) struct Session {
     child: Child,
     stdin: Option<ChildStdin>,
     messages: Receiver<Value>,
     /// Messages read so far that no step has claimed.
-    seen: Vec<Value>,
+    pub(crate) seen: Vec<Value>,
     /// Answers by request method.
-    answers: HashMap<String, Value>,
+    pub(crate) answers: HashMap<String, Value>,
     next_id: i64,
     stderr: PathBuf,
 }
@@ -44,7 +44,7 @@ impl Drop for Session {
 }
 
 impl Session {
-    fn send(&mut self, message: &Value) {
+    pub(crate) fn send(&mut self, message: &Value) {
         let body = message.to_string();
         let stdin = self.stdin.as_mut().expect("the session's input is open");
         let written = write!(stdin, "Content-Length: {}\r\n\r\n{body}", body.len())
@@ -55,7 +55,7 @@ impl Session {
     }
 
     /// Waits for the response with `id`.
-    fn answer(&mut self, id: &Value) -> Value {
+    pub(crate) fn answer(&mut self, id: &Value) -> Value {
         if let Some(index) = self
             .seen
             .iter()
@@ -88,7 +88,7 @@ impl Session {
     }
 
     /// Sends a request and waits for its answer.
-    fn request(&mut self, method: &str, params: Value) -> Value {
+    pub(crate) fn request(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         let id = json!(self.next_id);
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
@@ -97,7 +97,7 @@ impl Session {
         answer
     }
 
-    fn notify(&mut self, method: &str, params: Value) {
+    pub(crate) fn notify(&mut self, method: &str, params: Value) {
         self.send(&json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }
 
@@ -119,7 +119,7 @@ impl Session {
         }
     }
 
-    fn diagnostics(&self) -> String {
+    pub(crate) fn diagnostics(&self) -> String {
         format!(
             "session stderr:\n{}",
             std::fs::read_to_string(&self.stderr).unwrap_or_default()
@@ -131,11 +131,11 @@ impl Session {
 /// home (`steps_lspmux`), so sessions end before the daemons are killed.
 #[derive(Debug, Default)]
 pub(crate) struct ShimState {
-    sessions: HashMap<String, Session>,
+    pub(crate) sessions: HashMap<String, Session>,
     /// The fake server's log (`LOG_ENV`).
     fake_log: Option<PathBuf>,
     /// The project the sessions open.
-    project: Option<PathBuf>,
+    pub(crate) project: Option<PathBuf>,
     /// Whether the sessions find the root as a Cargo workspace.
     cargo_root: bool,
     /// Wrappers by name.
@@ -158,7 +158,7 @@ pub(crate) fn file_uri(path: &Path) -> String {
 
 /// The project directory the sessions open: `project` in the scratch
 /// directory, with `src/lib.rs`.
-fn project(world: &mut CodetagsWorld) -> PathBuf {
+pub(crate) fn project(world: &mut CodetagsWorld) -> PathBuf {
     if let Some(project) = &world.shim.project {
         return project.clone();
     }
@@ -233,7 +233,11 @@ fn serve_runs_with_arguments(world: &mut CodetagsWorld, role: String, args: Stri
 }
 
 /// Starts a session process: `command` with piped stdio, read on a thread.
-fn spawn_session(world: &mut CodetagsWorld, name: &str, mut command: Command) -> Session {
+pub(crate) fn spawn_session(
+    world: &mut CodetagsWorld,
+    name: &str,
+    mut command: Command,
+) -> Session {
     let stderr = world.scratch().join(format!("{name}.stderr"));
     command
         .current_dir(project(world))
@@ -292,7 +296,7 @@ fn read_message(input: &mut impl BufRead) -> Option<Vec<u8>> {
 }
 
 /// The `initialize` a scripted client sends for `root`.
-fn initialize(name: &str, root: &Path, capabilities: Value) -> Value {
+pub(crate) fn initialize(name: &str, root: &Path, capabilities: Value) -> Value {
     let uri = file_uri(root);
     json!({
         "jsonrpc": "2.0",
@@ -309,10 +313,10 @@ fn initialize(name: &str, root: &Path, capabilities: Value) -> Value {
     })
 }
 
-/// Sends `initialize` (id 1), waits for its answer, sends `initialized`.
-fn handshake(session: &mut Session, message: &Value) {
+/// Sends `initialize`, waits for the answer to its id, sends `initialized`.
+pub(crate) fn handshake(session: &mut Session, message: &Value) {
     session.send(message);
-    let answer = session.answer(&json!(1));
+    let answer = session.answer(&message["id"]);
     assert!(
         answer.get("result").is_some(),
         "initialize was refused: {answer}\n{}",
@@ -388,7 +392,7 @@ fn multi_root_initialize(world: &mut CodetagsWorld, role: String, name: String, 
     world.shim.sessions.insert(name, session);
 }
 
-fn session<'a>(world: &'a mut CodetagsWorld, name: &str) -> &'a mut Session {
+pub(crate) fn session<'a>(world: &'a mut CodetagsWorld, name: &str) -> &'a mut Session {
     world
         .shim
         .sessions
@@ -621,7 +625,7 @@ fn wrapper_runs(world: &mut CodetagsWorld, name: String, args: String) {
 
 /// The client capabilities a VS Code-style client sends (the parts the
 /// shim and lspmux care about).
-fn vscode_capabilities() -> Value {
+pub(crate) fn vscode_capabilities() -> Value {
     json!({
         "general": {"positionEncodings": ["utf-16"]},
         "window": {"workDoneProgress": true},
@@ -669,7 +673,7 @@ fn vscode_session(world: &mut CodetagsWorld, name: String, wrapper: String) {
 
 /// The recorded client messages of `tests/fixtures/lsp/<name>.jsonl`, with
 /// the sanitized project (`/project`) replaced by `project`.
-fn recorded_client_messages(name: &str, project: &Path) -> Vec<Value> {
+pub(crate) fn recorded_client_messages(name: &str, project: &Path) -> Vec<Value> {
     let path = repo_root()
         .join("tests")
         .join("fixtures")

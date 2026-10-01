@@ -16,6 +16,7 @@ Given the environment variable {string} is {string}
 When codetags is run with {string}      # args split on whitespace; captures exit status, stdout, stderr
 Then it exits with status {int}
 Then stdout matches {string}            # Rust `regex` syntax, unanchored unless the pattern anchors itself
+Then stderr matches {string}            # the same, for the last process's stderr
 ```
 
 ## DuckDB model layer
@@ -672,6 +673,103 @@ Then the fake server's initialize did not advertise {string}   # a dotted capabi
 
 `it exits with status {int}` and `stdout matches {string}` (Commands) apply
 to `codetags-lsp serve` and wrapper runs.
+
+## The LSP wiring (M3, P3.14)
+
+This repo's setup and wrappers, as a person runs them, against this
+toolchain's real rust-analyzer through the real lspmux
+(`features/lsp/wiring.feature`; PLAN.md D25). Paths in steps are relative to
+the scratch checkout and `/`-separated on every OS. Every process runs in
+the scenario's isolated home (above), in the checkout, without
+`CODETAGS_LSP_LOG_DIR`, `CODETAGS_LSPMUX_XDG_CONFIG_HOME`,
+`CLAUDE_PROJECT_DIR` or `CLAUDE_PLUGIN_ROOT` from the test's environment (a
+log directory makes each session's server command different, and lspmux
+would start two servers). Sessions are those of the shim steps: the checkout
+is their project, answers are read on their own thread, each waited for up
+to 60 s, and sessions and the daemons they started are killed when the
+scenario ends. Polling steps ask every 250 ms; an error answer counts as not
+yet.
+
+```gherkin
+Given a scratch checkout of the Rust fixture with this repo's LSP wiring
+      # tests/fixtures/rust copied to <scratch>/checkout, plus this repo's
+      # tools/lsp/, tools/vscode/, tools/claude-plugins/codetags-lsp/ and
+      # .vscode/settings.json, without the gitignored Windows wrappers; `git
+      # init` and one commit (pinned identity, core.autocrlf=false), so `git
+      # restores` works. Makes the isolated home if no step did.
+Given lspmux is installed in the scratch checkout
+      # copies the pinned lspmux (CODETAGS_LSPMUX, as for @lspmux) to
+      # .codetags/local/bin/lspmux[.exe], where `just setup-lspmux` puts it
+Given lsp-setup has run in the scratch checkout
+      # `sh tools/lsp/lsp-setup.sh <codetags-lsp> <codetags> --yes`, the
+      # script `just lsp-setup` runs, with the built binaries; must exit 0.
+      # On Windows it also installs the .exe wrappers (V119), and passes
+      # --listen 127.0.0.1:<a free port> to `codetags lsp setup`
+Given the scratch checkout's shim is a build with no serve command
+      # Linux and macOS: a stand-in .codetags/local/bin/codetags-lsp that
+      # exits 2 with clap's "unrecognized subcommand 'serve'" for `serve`, as
+      # a stage-0 build does, and rust-analyzer.path naming this toolchain's
+      # rust-analyzer, as `just lsp-record-setup` writes it
+When Claude Code's plugin wrapper runs with the arguments {string}
+      # tools/claude-plugins/codetags-lsp/scripts/rust-analyzer, by its path
+      # without an extension, with CLAUDE_PROJECT_DIR and CLAUDE_PLUGIN_ROOT
+      # set (V107, V114); args split on whitespace; stdin empty; captures
+      # exit status, stdout, stderr
+When Claude Code's plugin starts its language server as session {string}
+      # the same wrapper, no arguments; sends the initialize recorded from
+      # Claude Code 2.1.286 (tests/fixtures/lsp, the-handshake, /project
+      # respelled as the checkout), waits for its result, then initialized
+When VS Code checks its rust-analyzer's version
+      # node tests/support/spawn-like-vscode.mjs --version: reads
+      # rust-analyzer.server.path from .vscode/settings.json, substitutes
+      # ${workspaceFolder}, spawns it with --version and no shell (V118);
+      # captures exit status, stdout, stderr. Needs Node on PATH
+When VS Code starts its rust-analyzer as session {string}
+      # the same helper with no arguments: the --version check, which must
+      # exit 0, then the server with no arguments and the helper's stdio;
+      # the session sends the initialize of "a VS Code-style session" (VS
+      # Code-like capabilities), waits for its result, then initialized
+When session {string} searches the workspace for {string} until it is found
+      # workspace/symbol until a result names it, at most 60 s: the warm-up
+      # for V128 (rust-analyzer still loading)
+When session {string} hovers on {string} in {string}
+      # textDocument/hover at the first whole-word occurrence in the file
+      # (UTF-16 column); asked again while the answer is ContentModified
+      # (-32801), at most 60 s (V130)
+When session {string} opens {string}
+      # textDocument/didOpen with the file's current text, version 1
+Then session {string}'s hover is not empty
+      # the last hover's result has non-empty contents
+Then within {int} s session {string}'s workspace search for {string} finds it
+Then within {int} s session {string}'s workspace search for {string} finds nothing
+      # workspace/symbol until a result names it (or one does not); fails at
+      # the limit with the last answer
+Then within {int} s session {string}'s symbols of {string} include {string}
+      # textDocument/documentSymbol, children included, the same way
+Then for {int} s session {string}'s symbols of {string} do not include {string}
+      # documentSymbol for the whole time; fails at the first answer that
+      # includes it, or if no answer listed any symbol
+Then lspmux status shows {int} instance(s) with {int} client(s)
+      # `lspmux status --json` in the home: the instances whose workspace
+      # root is the checkout, each with that many clients
+When {string} gets the line {string} before the line starting {string}
+      # rewrites the file in place with its own line endings; fails if no
+      # line starts so
+When the new file {string} holds {string}       # the text plus a newline
+When git restores {string}                      # git checkout -- <path>
+When codetags doctor runs in the scratch checkout
+      # captures exit status, stdout, stderr
+Then the scratch checkout's shim can serve
+      # .codetags/local/bin/codetags-lsp serve --help exits 0
+Then the scratch checkout's rust-analyzer path names this toolchain's rust-analyzer
+      # .codetags/local/rust-analyzer.path is `rustup which rust-analyzer`
+      # (run in this repo)
+```
+
+`it exits with status {int}`, `stdout matches {string}` and `stderr matches
+{string}` (Commands) apply to the wrapper, helper and doctor runs. `lspmux's
+config sets {string} to {string}`, `no lspmux daemon is answering` and `the
+lspmux daemon was started {int} time(s)` (above) apply to the home.
 
 ## Scenario tags
 

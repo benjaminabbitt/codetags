@@ -188,7 +188,7 @@ fn unix_ms() -> u64 {
         })
 }
 
-fn copy_tree(from: &Path, to: &Path) {
+pub(crate) fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap_or_else(|e| panic!("create {}: {e}", to.display()));
     for entry in std::fs::read_dir(from).unwrap_or_else(|e| panic!("list {}: {e}", from.display()))
     {

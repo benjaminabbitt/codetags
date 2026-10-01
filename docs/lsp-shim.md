@@ -18,11 +18,17 @@ Linux and macOS:
 
 ```sh
 just setup-lspmux        # builds the pinned lspmux into .codetags/local/bin (about a minute, once)
-just lsp-setup           # copies the shim to .codetags/local/bin, records this toolchain's
-                         # rust-analyzer, then runs `codetags lsp setup`, which shows the
-                         # change to lspmux's config and asks before writing it
-just doctor              # lspmux's revision, its config, the socket directory
+just lsp-setup           # builds, then runs tools/lsp/lsp-setup.sh: copies the shim to
+                         # .codetags/local/bin, records this toolchain's rust-analyzer, then
+                         # runs `codetags lsp setup`, which shows the change to lspmux's
+                         # config and asks before writing it
+just doctor              # lspmux's revision, its config, the socket directory, and
+                         # "lsp wiring": whether this checkout's clients use the shim
 ```
+
+`tools/lsp/lsp-setup.sh CODETAGS_LSP CODETAGS [options]` wires the checkout
+it lives in, with the given binaries, and passes any options to `codetags
+lsp setup`; the wiring scenarios (§4) run it in a scratch checkout.
 
 Then restart Claude Code in this checkout (`/plugin` lists
 `codetags-lsp@codetags-local`, enabled, and the official `rust-analyzer-lsp`
@@ -40,7 +46,15 @@ no Unix socket on Windows, so the daemon listens on loopback TCP, which any
 local user can reach (C-3; `codetags doctor` says so).
 
 Until setup has run, both wrappers run rust-analyzer from `PATH` directly,
-as before.
+as before. They also run the recorded rust-analyzer directly, without the
+shim, when `.codetags/local/bin/codetags-lsp serve --help` fails (a stage-0
+build from `just lsp-record-setup` has no `serve`; D25) or no lspmux is
+found. Each fallback says why on stderr, with the fix. `codetags doctor`
+reports the same on its `lsp wiring:` line, for the checkout in its working
+directory: through the shim, or without it and why (`run: just lsp-setup` or
+`run: just setup-lspmux`). On Windows that line checks the `.exe` wrappers
+and their settings instead. It is information, never a failure, since the
+fallback is deliberate.
 
 ## 2. What each part does
 
@@ -134,6 +148,16 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
   agent killed without `exit`, root normalization, `workspace/configuration`,
   a scripted VS Code-style session through a wrapper, and the recorded Claude
   Code session (`tests/fixtures/lsp`) replayed as the agent.
+- `features/lsp/wiring.feature` (`@lspmux @providers`, CI's `providers` job
+  on all three OSes, P3.14, D25): §1 as a person runs it, in a scratch
+  checkout of the Rust fixture with this repo's wiring. `lsp-setup.sh` runs
+  there; the plugin's wrapper is started as Claude Code starts it and VS
+  Code's through Node as the extension does (`tests/support/
+  spawn-like-vscode.mjs`, V118); both share one real rust-analyzer through
+  lspmux. It also covers the fallbacks before setup and with a stage-0 shim,
+  doctor's `lsp wiring:` line, and V126's on-disk changes reaching
+  rust-analyzer with no client telling it, with an editor-opened document as
+  the control.
 - `features/lsp/claude-client.feature`, rule "Through the shim and lspmux"
   (`@claude @linux`, `just test-claude`): Claude Code itself through the
   plugin, the shim and lspmux to rust-analyzer.

@@ -25,6 +25,10 @@
 #
 # Without setup, this runs rust-analyzer from PATH directly, as the official
 # rust-analyzer-lsp plugin does, so the client still has a language server.
+# With a shim that cannot serve (`codetags-lsp serve --help` fails, as in a
+# stage-0 build), or no lspmux, it runs the recorded rust-analyzer directly.
+# Each fallback says why on stderr; `codetags doctor` reports the same
+# ("lsp wiring").
 
 role="${1:?usage: rust-analyzer-shim.sh editor|agent [args...]}"
 shift
@@ -35,6 +39,11 @@ for local_dir in ${CLAUDE_PROJECT_DIR:+"$CLAUDE_PROJECT_DIR/.codetags/local"} "$
         continue
     fi
     server=$(cat "$local_dir/rust-analyzer.path")
+    # A stage-0 build (`just lsp-record-setup`) has no `serve` (D25).
+    if ! "$shim" serve --help >/dev/null 2>&1; then
+        echo "rust-analyzer ($role): $shim cannot serve (run: just lsp-setup); running rust-analyzer without the shim" >&2
+        exec "$server" "$@"
+    fi
     lspmux=""
     for candidate in "$local_dir/bin/lspmux" "$repo/.codetags/local/bin/lspmux"; do
         if [ -x "$candidate" ]; then

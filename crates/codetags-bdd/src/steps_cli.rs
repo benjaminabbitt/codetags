@@ -39,3 +39,13 @@ fn stdout_matches(world: &mut CodetagsWorld, pattern: String) {
         "stdout {stdout:?} does not match {pattern:?}"
     );
 }
+
+#[then(expr = "stderr matches {string}")]
+fn stderr_matches(world: &mut CodetagsWorld, pattern: String) {
+    let regex = regex::Regex::new(&pattern).expect("the step's pattern is a valid regex");
+    let stderr = &world.last().stderr;
+    assert!(
+        regex.is_match(stderr),
+        "stderr {stderr:?} does not match {pattern:?}"
+    );
+}

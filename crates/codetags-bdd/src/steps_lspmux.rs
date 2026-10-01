@@ -42,7 +42,7 @@ pub(crate) struct Home {
     #[cfg(unix)]
     runtime: tempfile::TempDir,
     /// Windows: the loopback port the daemon listens on.
-    port: Option<u16>,
+    pub(crate) port: Option<u16>,
 }
 
 impl Home {
@@ -159,7 +159,7 @@ pub(crate) fn lspmux_binary() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn required_lspmux() -> PathBuf {
+pub(crate) fn required_lspmux() -> PathBuf {
     lspmux_binary().expect(
         "lspmux not found: run `just setup-lspmux`, or set CODETAGS_LSPMUX (the @lspmux scenarios need it)",
     )
@@ -205,7 +205,7 @@ fn home_env(root: &Path, #[allow(unused_variables)] runtime: &Path) -> Vec<(OsSt
 }
 
 #[given("an isolated home for lspmux")]
-fn an_isolated_home(world: &mut CodetagsWorld) {
+pub(crate) fn an_isolated_home(world: &mut CodetagsWorld) {
     let root = world.scratch().join("home");
     for dir in [
         root.join(".config"),

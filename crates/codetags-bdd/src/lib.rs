@@ -26,6 +26,7 @@ mod steps_report;
 mod steps_shim;
 mod steps_store;
 mod steps_watch;
+mod steps_wiring;
 mod tags;
 
 use std::ffi::OsString;

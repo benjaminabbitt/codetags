@@ -3,7 +3,9 @@
 //! Exit status 1 means something is misconfigured that the user can fix.
 //! A missing optional capability (e.g. no FUSE) is reported, not an error:
 //! static views and the CLI work everywhere (D3). The LSP proxy's checks
-//! (lspmux's revision and config; M3) come from `codetags_lsp::doctor`.
+//! (lspmux's revision and config; M3) come from `codetags_lsp::doctor`, and
+//! whether the checkout in the working directory runs rust-analyzer through
+//! the shim from `codetags_lsp::wiring`.
 
 use std::process::ExitCode;
 
@@ -23,6 +25,10 @@ pub fn run() -> ExitCode {
         report.needs_fixing |= finding.needs_fixing;
         report.lines.push(finding.line);
     }
+    // Information only (D25): without the shim the wrappers fall back on
+    // purpose, so this never makes doctor fail.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    report.lines.push(codetags_lsp::wiring::line(&cwd));
     for line in &report.lines {
         println!("{line}");
     }
