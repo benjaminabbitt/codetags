@@ -115,10 +115,14 @@ baseline-check:
     @echo "baseline-check: not built yet (P1.8)"
     @exit 1
 
-# Privileged-helper features; CI only (P4.4).
+# Privileged-helper features (P4.4): the bdd suite with the `privileged`
+# capability enabled. CI only (the privileged-linux job): the scenarios start
+# codetags-privhelper with `sudo -n` themselves, so sudo must need no
+# password, while the scenarios and their watchers run as the calling,
+# unprivileged user. Builds the helper binary first: the bdd test does not.
 test-privileged:
-    @echo "test-privileged: not built yet (P4.4)"
-    @exit 1
+    cargo build --workspace --bins
+    CODETAGS_BDD_CAPABILITIES=privileged cargo test --workspace --test bdd
 
 bench:
     cargo bench --workspace

@@ -394,13 +394,63 @@ jobs:
           path: ${{ runner.temp }}/name-probe.md
           if-no-files-found: warn
 
+  # PLAN.md §5: the optional privileged helper (P4.4). The scenarios start
+  # codetags-privhelper with `sudo -n` themselves (the runner's sudo needs no
+  # password), while the test process, its watchers and helper clients run as
+  # the unprivileged runner user.
+  privileged-linux:
+    name: privileged (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # As in the check job: rust-cache prunes the downloaded libduckdb but
+      # keeps libduckdb-sys's build-script fingerprint (V29).
+      - name: Re-fetch the prebuilt libduckdb
+        shell: bash
+        run: cargo clean -p libduckdb-sys
+
+      - uses: extractions/setup-just@v2
+
+      - name: Kernel and sudo
+        shell: bash
+        run: |
+          uname -r
+          sudo -n true
+          echo "sudo -n works"
+
+      # The test process is unprivileged; only the helper runs as root.
+      - name: Assert unprivileged
+        shell: bash
+        run: ci/assert-unprivileged.sh
+
+      - name: just test-privileged
+        shell: bash
+        env:
+          CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
+        run: just test-privileged
+
+      - name: Upload the BDD record
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-ran-privileged-linux
+          path: ${{ runner.temp }}/bdd-ran.txt
+          if-no-files-found: warn
+
   # PLAN.md §0.11: every scenario must run in some job, or be listed in
   # ci/expected-skips.txt. Runs whether the BDD jobs pass or fail, so a
   # failing run still reports what went unrun. Add every job that runs BDD
   # to `needs`.
   bdd-coverage:
     name: bdd-coverage
-    needs: [check, mount-linux, mount-macos, providers, mount-windows]
+    needs: [check, mount-linux, mount-macos, providers, mount-windows, privileged-linux]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
