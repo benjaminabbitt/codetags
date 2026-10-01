@@ -60,10 +60,14 @@ of tagma's `PLAN.md`:
 | D7 | **Functionality is described in Gherkin** and run with cucumber. | §6 |
 | D8 | **All views go through a plugin engine** built here. That includes `files/`, cards, `README`, `FACETS`, graphs, and result-set renderings in `q/`. **Architecture diagrams (Mermaid)** are generated from the code as virtual files, as a plugin. | §4.5 (views become plugins; adds Mermaid beside `modules.dot`) |
 | D9 | **Licensing:** codetags is **BSD-3-Clause**, and `crates/lspx` stays **EUPL-1.2**, as lspmux requires. Hosting is not a concern, because this is developer tooling. No BSD crate or binary may link `lspx` code, since that would make it EUPL; `lspx` may depend on BSD crates. **GPL-3.0 is tolerated for the WinFsp backend** when it's the better choice, and it is (V28). The `winfsp` crate is allowed only under `codetags-mount-winfsp`, so Windows binaries built with that backend are distributed under GPL-3.0. Source and the Linux/macOS binaries stay BSD-3. | none (resolves O-1) |
+| D10 | **Dogfood:** run codetags on this repo as soon as each piece can (milestones M1–M3, §6). | none |
+| D11 | **View and edit by tags, BATFS-style** (§2.10). **DRAFT, for review.** Query directories show the real source files; reads and writes go to those files, and filesystem operations in query directories add and remove tags. | Reverses brief §1's non-goal "editing code through views" for source files reached through tags. Derived views (`.skel`, cards, diagrams) stay read-only. Supersedes the O-6 and O-7 defaults. |
+| D12 | **Recursion guard** (§2.11). **DRAFT, for review.** Every mutating operation goes through one serialized queue, deletes are buffered, and a decaying counter detects recursive operations and holds them. | none |
+| D13 | **Change notifier** (§2.12). **DRAFT, for review.** Watcher events become tagged items. Per-consumer filters, written as tagma postfix queries over file name, extension, metadata and tags, decide what each language server is sent. | brief §4.3 "Routing" |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
-The planning agent derived these from D1–D9 and from research. Each is a default the human may overturn.
+The planning agent derived these from D1–D13 and from research. Each is a default the human may overturn.
 
 - **C1. Transport.**
   - Linux and macOS: a Unix socket.
@@ -182,7 +186,7 @@ optional, admin-installed: codetags-privhelper (fanotify | USN journal) ─> eve
 - **Derived facets** follow the brief's ingest sketch (`kind`, `lang`, `module`, `calls`, `caller`, `target`, `line`, `dispatch`, `prov:*`, …) and are rebuilt with every generation. The full list is generated into `docs/facets.md`.
 - **Reserved names.** Users may not write:
   - any null-namespace key used by a derived facet;
-  - the namespaces `prov`, `ct`, and `tagma.*`;
+  - the namespaces `prov`, `ct`, `fs` (change-notifier facts, §2.12), and `tagma.*`;
   - any extra key listed in `config.toml`.
 
   Writing one is rejected, and the error names the reserved set.
@@ -253,7 +257,7 @@ Why the other candidates are not v1 backends:
   - It sends only an event stream.
   - Events are filtered to roots the requesting user can read, and the helper checks this itself.
   - It never executes project code and is never required.
-- **Tagging through a mount** is add-only and accepts only definite atoms (Appendix B). Removing tags is CLI-only (O-6).
+- **Mutations through a mount** (D11) all go through the operation queue and recursion guard (§2.11). Views edit file contents and tags. They never create, delete, or rename source files (O-16).
 - **Plugins never run repo-supplied code** unless the user has trusted it on their own machine (O-14).
   - Declarative plugins run on a read-only DuckDB connection with external access disabled and configuration locked (V22).
   - Their templates have no filesystem or network access.
@@ -307,6 +311,66 @@ trait ViewPlugin: Send + Sync {
 - `.md` twins wrapping each diagram in a ```` ```mermaid ```` fence, so GitHub and VS Code previews render it.
 
 Mermaid has size limits (⚠ V23; believed to be 500 edges and 50,000 characters by default). The plugin aggregates to stay under them (O-15) and writes a comment saying what it elided, rather than emitting a diagram that won't render.
+
+### 2.10 Editing by tags (D11, DRAFT for review)
+
+Under a query directory `q/<Q>`, result groups become:
+
+| Group | Contents | Writable |
+|---|---|---|
+| `@files/<path>` | the **real source file** at project path `<path>` (passthrough) | content: yes; tags: via the operations below |
+| `@skel/<path>.skel` | the derived skeleton of that file | no |
+| `@symbols/`, `@sites/`, `@views/` | as in §2.9 and Appendix B | no |
+
+**Operation mapping** in `q/<Q>`. Here *A* is the set of definite atoms in *Q*: bare keys or `key=value`, optionally namespaced. If *Q* contains `or`, `not`, a quantifier, or a relational, `~` or `!=` element, its directory accepts no tag operations (EINVAL).
+
+| Operation | Effect |
+|---|---|
+| read `@files/<path>` | reads the source file |
+| write or truncate `@files/<path>` | writes the source file in place, through the queue |
+| an editor's atomic save (write a temp file, then rename it over the target) | the temp file lives in a per-mount staging area, never in the project; the rename replaces the source file atomically (a temp file plus rename in the source file's own directory) |
+| create, `touch`, `cp` or `ln` to `@files/<path>`, where `<path>` exists in the project | adds *A* to that file |
+| create `@files/<path>`, where `<path>` does not exist | EPERM (O-16) |
+| `mv q/<Q1>/@files/<p> q/<Q2>/@files/<p>` | retags: removes *A1* and adds *A2*, as one queued operation |
+| `rm q/<Q>/@files/<path>` | **untags**: removes *A* from the file, never the file itself; buffered (§2.11) |
+| `mkdir q/<Q>/<elem>` | succeeds if `<elem>` is a valid next element; every valid query directory already exists |
+| `rmdir` of a query directory | EPERM. Removing a tag from every item is `codetags untag --all`, which is explicit and journaled. |
+
+**Journal.** Every tag change is recorded with its time, actor and inverse operation in `.codetags/local/journal` (ignored). `codetags ops undo` reverses changes, and git is the history for the committed `tags` file. This replaces BATFS's Trash tag; nothing needs a reserved tag.
+
+### 2.11 Operation queue and recursion guard (D12, DRAFT for review)
+
+- **One queue.** Every mutating operation from every frontend (FUSE, NFS, WinFsp, the CLI) becomes an `Op` on one serialized queue per project, applied by one worker. That gives ordering, a single writer for `.codetags/tags`, the journal, and one place for policy. Reads never queue.
+- **Buffered deletes.** Destructive operations (untag via `rm`, the removal half of a retag, `untag --all`) wait for a grace window (default 2 s) before they commit. Creates and content writes commit at once.
+- **Decaying counter.** Each actor has a counter that decays on every destructive operation: *c* ← *c*·2^(−Δ*t*/*h*) + 1, with half-life *h* (default 1 s).
+  - FUSE and WinFsp identify the actor by the requesting PID.
+  - NFSv3 carries no PID, so on macOS the actor is the whole mount.
+  - For the CLI, the actor is the invocation.
+  - The breadth of distinct directories touched is tracked as well, to tell `rm -r`'s sweep apart from a few hand deletions.
+- **Tripping.** When *c* crosses the threshold *T* (default 20), the actor trips:
+  - its buffered deletes do not commit;
+  - its further destructive operations fail with EPERM until it has been quiet (*c* < *T*/4);
+  - the held batch appears in `codetags ops pending` and in a read-only `@pending` file at the view root.
+
+  `codetags ops commit` and `codetags ops discard` resolve it.
+- **Content writes** are counted and journaled but never held (O-18).
+
+### 2.12 Change notifier (D13, DRAFT for review)
+
+- **Events as items.** Each coalesced watcher batch becomes a small tagma index with one item per changed path. Each item is tagged with:
+  - `fs:event=created|changed|deleted`, `fs:path=<project-relative path>`, `fs:name=<file name>`, and `fs:ext=<extension>`;
+  - `fs:dir=<ancestor>` for **every** ancestor directory (multi-valued, like `module`);
+  - `fs:kind=file|dir|symlink`, `fs:size`, `fs:mtime`, `fs:ignored` (gitignored), and `fs:generated` (under the build-output excludes);
+  - plus the file's user tags and its derived facets (e.g. `lang=rust`) from the current generation.
+- **Filters.** Every consumer has a filter, written as a tagma postfix query: each language-server instance, the reindex loop, and plugins. A language server is sent the events that match its filter **and** its registered globs (brief §4.3). A filter can only narrow what a server registered for, never widen it; servers that register nothing still get nothing.
+- **Why not globs everywhere.** tagma v1's `~` is anchored and has only `.` as a wildcard, so server registrations stay globs (`globset`). User filters use `fs:ext`, `fs:name` and `fs:dir` instead.
+- **Configuration** (*sketch*). Built-in defaults exist per server; `.codetags/config.toml` overrides them:
+
+  ```toml
+  [notify.rust-analyzer]
+  filter = "fs:ext=rs/fs:name=Cargo.toml/or/fs:name=Cargo.lock/or/fs:dir=target/not/and"
+  ```
+- **Readiness gate.** Only servers that were actually sent events are held by the readiness gate (brief §4.2).
 
 ---
 
@@ -393,6 +457,11 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 ```
 
 - The index/views track (P1, P2, P5, P6, P7) and the proxy track (P3, P4) run in parallel.
+- **Dogfood milestones** (D10):
+  - **M1, static.** Once P1.4 (the Rust provider) and P2.5–P2.6 (materializer and CLI) are done, `just dogfood` indexes this repo and materializes its views. CI runs it, and development uses the views. This repo's own `.codetags/` is committed then.
+  - **M2, live.** After P5.1, this repo's views are mounted while developing on Linux.
+  - **M3, proxy.** After P3–P4, this repo's rust-analyzer runs through `lspx`.
+  - **P1 order:** the Rust provider is built first, to reach M1 soonest.
 - Phase numbers are labels, not order:
   - P6 needs P2 but not P5, except P6.4.
   - P7 needs P2.3's trait, and nothing else.
@@ -488,8 +557,10 @@ This no longer gates anything (D2).
 |---|---|---|
 | P4.1 | CORE | `codetags-watch` on notify: scan new directories to close the creation race; on Rescan, diff against the last snapshot; apply the brief's excludes plus `.codetags/index/`; give clear limit errors (the inotify sysctl, the Windows buffer). |
 | P4.2 | CORE | Coalescer: the brief's merge rule, a quiet window with a maximum-wait cap, and a pause while `.git/index.lock` exists. |
-| P4.3 | CORE | Route each batch to servers by their registered globs; readiness gate. |
+| P4.3 | CORE | Route each batch to servers by registered globs ∧ the server's notifier filter (§2.12); readiness gate. |
 | P4.4 | CORE | Optional privhelper: fanotify on Linux, USN journal on Windows. It filters paths per user; the daemon logs which mode is active and falls back when the helper is absent. |
+| P4.6 | SPEC | `features/watch/notify.feature`: the `fs:` facts, filter semantics, narrowing-only, and the per-server defaults. Human review. |
+| P4.7 | CORE | Change notifier (§2.12): per-batch event index, filters from config, built-in defaults for rust-analyzer, gopls, pyright and the TS server. |
 | P4.5 | CORE | Reindex loop in `codetagsd`: batch → affected providers → new generation → views swap. A change to the tags file reloads only the overlay. |
 
 **Done when:**
@@ -516,15 +587,17 @@ This no longer gates anything (D2).
 
 | ID | Tag | Task |
 |---|---|---|
-| P6.1 | SPEC | `features/tags/*.feature`: tag, untag and list via the CLI; reserved names; orphans; re-pointing after a rename; the tags file format and its merge behaviour. Human review. |
+| P6.1 | SPEC | `features/tags/*.feature`: tag, untag and list via the CLI; reserved names; orphans; re-pointing after a rename; the tags file format and its merge behaviour; plus the §2.10 operation mapping and the §2.11 guard. Human review. |
 | P6.2 | CORE | `codetags-tags`: parse, write and lock the tags file. Commands: `codetags tag`, `untag`, `tags`, `tags check`, `tags mv`. |
 | P6.3 | CORE | Apply the overlay to the tagma index and the renderers, so user tags appear in `.skel` headers and symbol cards. Benchmark write-to-visible latency (O-8). |
-| P6.4 | CORE | Tagging through live mounts (Appendix B). Needs P5. |
+| P6.4 | CORE | Operation queue, journal, `codetags ops pending/commit/discard/undo`, and the recursion guard (§2.11). Scenarios: `rm -r` over a 100-file query directory untags nothing until commit; a single `rm` commits after the grace window. |
+| P6.5 | CORE | BATFS-style tag operations through live mounts (§2.10), via the queue. Needs P5. |
+| P6.6 | CORE | `@files` passthrough reads and writes, including editor atomic saves through the staging area. Needs P5. |
 
 **Done when:**
 
 - the tag features pass through the CLI on all three OSes;
-- the mount-tagging features pass on each live backend.
+- the §2.10 and §2.11 features pass on each live backend.
 
 ## 15. P7 — view plugins and Mermaid diagrams (D8)
 
@@ -562,8 +635,8 @@ This no longer gates anything (D2).
 | O-3 | Add `remove_item` to tagma (now on the tagging hot path). | clone-and-apply per write; revisit if the P6.3 benchmark fails |
 | O-4 | Upstream the path profile into tagma's SPEC. | codetags-local |
 | O-5 | macOS NFS loopback is reachable by other local users. | accept, with the §2.8 mitigations |
-| O-6 | Untagging by unlinking an entry in a query directory. | refused; untag through the CLI only (avoids BATFS's `rm -r` hazard) |
-| O-7 | Should file items in `q/` show the `.skel` view or the raw source (which would let agents grep source through a tag filter)? | `.skel` |
+| O-6 | Untagging by unlinking an entry in a query directory. | **superseded by D11:** `rm` untags, guarded by §2.11 |
+| O-7 | Should file items in `q/` show the `.skel` view or the raw source? | **superseded by D11:** raw source under `@files/`, skeletons under `@skel/` |
 | O-8 | Targets: tag write → visible; source edit → view fresh; a cap on result listings. | 250 ms p95 on 1M items (proposed); measure freshness first; no cap |
 | O-9 | Import lspmux by subtree, or keep a separate fork repo. | subtree |
 | O-10 | macFUSE or FUSE-T as optional macOS backends when already installed. | not in v1 |
@@ -572,6 +645,10 @@ This no longer gates anything (D2).
 | O-13 | Incremental edges from the proxy's warm servers (`source=lsp@ver`) between SCIP runs. | not in v1 |
 | O-14 | Plugins that execute code: WASM (sandboxed, cross-platform, any language) or external processes (simplest, but a repo-supplied command is code run on clone, so it needs a trust step like `direnv allow`). | not in v1; built-in and declarative only |
 | O-15 | Mermaid aggregation policy (module depth, edge cap, how elisions are shown). | collapse to module depth 2 and keep the heaviest edges under the limit; list elided counts in a comment |
+| O-16 | Creating, deleting or renaming *source files* through views. | refused: views edit contents and tags, never the shape of the tree |
+| O-17 | Recursion-guard parameters: half-life, threshold, grace window, quiet level; and what a tripped actor sees. | 1 s, 20, 2 s, *T*/4; EPERM plus `@pending` and `codetags ops pending` |
+| O-18 | Whether mass content writes (e.g. `sed -i` over a query directory) are held like deletes. | counted and journaled, never held |
+| O-19 | D11–D13 are drafts: confirm the operation mapping, the guard, and the notifier before their [SPEC] features are written. | none; the human reviews |
 
 ## 17. Risks
 
@@ -605,6 +682,7 @@ This no longer gates anything (D2).
 | `bench` | criterion |
 | `eval CONDITION` | Evaluation condition A, B or C |
 | `doctor` | Environment report: mount backend, helper, providers |
+| `dogfood` | Index this repo and refresh its views (M1) |
 | `dev-tagma PATH` | Local tagma override (ignored config) |
 
 ## Appendix B — view tree and tag-write rules
@@ -618,7 +696,8 @@ These are defaults. Once `features/views` and `features/tags` are approved, the 
   modules.dot  unresolved/<module>.txt  orphans.txt
   arch/modules.mmd  arch/modules.md  arch/<module>.mmd     # mermaid plugin, root mount (P7)
   q/<elem>/<elem>/...              # live mounts only; each <elem> is one postfix element
-      @files/<path>.skel           # results, grouped by kind; only non-empty groups are listed
+      @files/<path>                # results, grouped by kind; only non-empty groups are listed
+                                   # @files are the real source files (D11); @skel/<path>.skel the skeletons
       @symbols/<canonical>.sym
       @sites/<n>.site
       @views/callgraph.mmd         # result-set plugins (P7); listed only if the result set is non-empty
@@ -634,13 +713,4 @@ These are defaults. Once `features/views` and `features/tags` are approved, the 
 - `q/` itself is the empty query and lists nothing.
 - The static tree has no `q/`. Its README points agents to `codetags q`.
 
-**Tag writes (live mounts, P6.4).**
-
-- Creating `q/<query>/@files/<path>` (for example with `touch`, with or without `.skel`) adds the query's atoms to that file.
-- The target must be an existing file.
-- Every element must be a definite atom: a bare key or `key=value`, optionally namespaced.
-- Errors:
-  - A quantifier, a relational operator, `~`, `!=`, `or`, or `not` returns EINVAL.
-  - A reserved name returns EPERM.
-  - A content write returns EROFS.
-  - Unlink and rename return EPERM (O-6).
+**Tag writes and edits (live mounts).** See §2.10 for the operation mapping and §2.11 for the queue and recursion guard.
