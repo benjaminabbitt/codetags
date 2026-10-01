@@ -60,6 +60,9 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Libr
 # gocallgraph's JSON lines (P1.5) and Jelly's JSON call graph (P1.6).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Linux system calls for the privileged helper (P4.4): fanotify, SO_PEERCRED,
+# and dropping privileges. MIT.
+nix = { version = "0.31", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

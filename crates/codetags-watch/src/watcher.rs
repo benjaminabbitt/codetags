@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,9 @@ use crate::change::{Batch, Change, ChangeKind, RescanCause};
 use crate::coalesce::{CoalesceConfig, Coalescer};
 use crate::error::WatchError;
 use crate::exclude::{INDEX_LOCK, PathClass, classify};
+#[cfg(unix)]
+use crate::privhelper::{Client, Notice, Shutdown, proto::EventKind as HelperKind};
+use crate::privhelper::{HelperSocket, WatchMode};
 use crate::snapshot::{self, Entry, Snapshot};
 
 /// How often the watcher re-checks `.git/index.lock` while it exists, in
@@ -34,10 +38,12 @@ const LOCK_POLL: Duration = Duration::from_millis(100);
 const IDLE: Duration = Duration::from_secs(3600);
 
 /// Watcher settings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WatchConfig {
     /// When batches are flushed.
     pub coalesce: CoalesceConfig,
+    /// The privileged helper to try before notify (P4.4).
+    pub helper: HelperSocket,
 }
 
 /// Adds the watches a newly found directory needs.
@@ -76,6 +82,35 @@ struct Recursive(#[allow(dead_code)] notify::RecommendedWatcher);
 impl DirWatcher for Recursive {
     fn watch_dir(&mut self, _dir: &Path) -> Result<(), WatchError> {
         Ok(())
+    }
+}
+
+/// The privileged helper: its filesystem mark already covers every
+/// directory, so nothing is added per directory.
+#[cfg(unix)]
+struct HelperCovers;
+
+#[cfg(unix)]
+impl DirWatcher for HelperCovers {
+    fn watch_dir(&mut self, _dir: &Path) -> Result<(), WatchError> {
+        Ok(())
+    }
+}
+
+/// Starts notify over `root`, sending its events to `inbox`: per-directory
+/// watches on Linux, one recursive watch elsewhere.
+fn notify_dirs(root: &Path, inbox: Sender<Message>) -> Result<Box<dyn DirWatcher>, WatchError> {
+    let mut notifier = notify::recommended_watcher(move |event| {
+        let _ = inbox.send(Message::Event(event));
+    })
+    .map_err(WatchError::from_notify)?;
+    if cfg!(any(target_os = "macos", windows)) {
+        notifier
+            .watch(root, RecursiveMode::Recursive)
+            .map_err(WatchError::from_notify)?;
+        Ok(Box::new(Recursive(notifier)))
+    } else {
+        Ok(Box::new(PerDirectory(notifier)))
     }
 }
 
@@ -156,6 +191,21 @@ impl Engine {
             self.examine(now, path, content)?;
         }
         Ok(())
+    }
+
+    /// Handles a hint that the absolute `path` may have changed, from an
+    /// event source other than notify (the privileged helper). `content`
+    /// says the source reported a write.
+    #[cfg(unix)]
+    pub fn hint(&mut self, now: Instant, path: &Path, content: bool) -> Result<(), WatchError> {
+        self.examine(now, path, content)
+    }
+
+    /// Replaces how new directories are watched, after switching event
+    /// source. Call [`Engine::rescan`] next, so every directory is watched.
+    #[cfg(unix)]
+    pub fn set_dirs(&mut self, dirs: Box<dyn DirWatcher>) {
+        self.dirs = dirs;
     }
 
     /// Classifies the absolute `path`. `content` says the event reported a
@@ -306,26 +356,70 @@ impl Engine {
 /// Messages to the watcher thread.
 enum Message {
     Event(notify::Result<Event>),
+    /// From the privileged helper's connection.
+    #[cfg(unix)]
+    Helper(std::io::Result<Notice>),
     Rescan,
     Stop,
 }
 
+/// A connected, subscribed helper, before its events are forwarded.
+#[cfg(unix)]
+struct Subscribed {
+    client: Client,
+    /// The root as the helper canonicalized it.
+    root: PathBuf,
+}
+
+/// Connects to the helper `config` names and subscribes to `root`, or says
+/// why not.
+#[cfg(unix)]
+fn subscribe(config: &HelperSocket, root: &Path) -> Result<Subscribed, String> {
+    let socket = config.resolve().map_err(str::to_string)?;
+    let mut client = Client::connect(&socket).map_err(|error| error.to_string())?;
+    let root = client.subscribe(root).map_err(|error| error.to_string())?;
+    Ok(Subscribed { client, root })
+}
+
+#[cfg(not(unix))]
+fn subscribe(config: &HelperSocket, _root: &Path) -> Result<std::convert::Infallible, String> {
+    match config.resolve() {
+        Ok(_) => Err("there is no privileged helper on this OS".into()),
+        Err(why) => Err(why.into()),
+    }
+}
+
+/// Logs which mode a watcher is in (brief §4.3: "log which mode is
+/// active").
+fn log_mode(root: &Path, mode: &WatchMode) {
+    eprintln!("codetags-watch: watching {} with {mode}", root.display());
+}
+
 /// A running watcher over one project root.
 ///
-/// It watches with notify (inotify, FSEvents or ReadDirectoryChangesW) on a
-/// thread of its own, and sends [`Batch`]es of changes relative to the root.
-/// Dropping it stops the thread.
+/// It watches on a thread of its own, with the privileged helper if one
+/// answers ([`WatchConfig::helper`]) and with notify (inotify, FSEvents or
+/// ReadDirectoryChangesW) otherwise, and sends [`Batch`]es of changes
+/// relative to the root. Dropping it stops the thread.
 pub struct Watcher {
     root: PathBuf,
+    mode: Arc<Mutex<WatchMode>>,
     control: Sender<Message>,
     batches: Receiver<Result<Batch, WatchError>>,
     thread: Option<JoinHandle<()>>,
+    /// Ends the helper connection's forwarding thread.
+    #[cfg(unix)]
+    helper: Option<Shutdown>,
 }
 
 impl Watcher {
     /// Starts watching `root` recursively, excluding build output,
     /// dependencies, git's internals and codetags' own index
     /// ([`crate::exclude`]).
+    ///
+    /// It first tries the privileged helper `config.helper` names, and uses
+    /// notify if the helper is absent, refuses, or fails; it logs which on
+    /// stderr, and [`Watcher::mode`] says too. The helper is never required.
     ///
     /// The initial scan and the first watches happen before this returns, so
     /// a watch limit fails here; later limits come from
@@ -351,37 +445,88 @@ impl Watcher {
         }
 
         let (control, inbox) = mpsc::channel();
-        let events = control.clone();
-        let mut notifier = notify::recommended_watcher(move |event| {
-            let _ = events.send(Message::Event(event));
-        })
-        .map_err(WatchError::from_notify)?;
-        let dirs: Box<dyn DirWatcher> = if cfg!(any(target_os = "macos", windows)) {
-            notifier
-                .watch(&canonical, RecursiveMode::Recursive)
-                .map_err(WatchError::from_notify)?;
-            Box::new(Recursive(notifier))
-        } else {
-            Box::new(PerDirectory(notifier))
-        };
+        // The helper's subscription is in place before the scan, so nothing
+        // written after the scan is missed.
+        #[allow(unused_mut)]
+        let (dirs, mode, mut helper): (Box<dyn DirWatcher>, _, _) =
+            match subscribe(&config.helper, &canonical) {
+                Ok(subscribed) => {
+                    #[cfg(unix)]
+                    {
+                        if subscribed.root != canonical && !aliases.contains(&subscribed.root) {
+                            aliases.push(subscribed.root.clone());
+                        }
+                        let mode = WatchMode::Helper {
+                            backend: subscribed.client.backend().to_string(),
+                            socket: subscribed.client.socket().to_path_buf(),
+                        };
+                        (Box::new(HelperCovers), mode, Some(subscribed.client))
+                    }
+                    #[cfg(not(unix))]
+                    match subscribed {}
+                }
+                Err(why_not_helper) => (
+                    notify_dirs(&canonical, control.clone())?,
+                    WatchMode::Notify { why_not_helper },
+                    None,
+                ),
+            };
+        log_mode(&canonical, &mode);
         let engine = Engine::new(canonical.clone(), aliases, dirs, config, Instant::now())?;
 
+        #[cfg(unix)]
+        let helper = match helper.take() {
+            Some(client) => {
+                let shutdown = client.shutdown_handle().map_err(notify::Error::io);
+                let events = control.clone();
+                let forwarded = client
+                    .forward(move |notice| events.send(Message::Helper(notice)).is_ok())
+                    .map_err(notify::Error::io);
+                match (shutdown, forwarded) {
+                    (Ok(shutdown), Ok(_thread)) => Some(shutdown),
+                    (Err(error), _) | (_, Err(error)) => {
+                        return Err(WatchError::Notify(error));
+                    }
+                }
+            }
+            None => None,
+        };
+        #[cfg(not(unix))]
+        let _: Option<std::convert::Infallible> = helper;
+
+        let mode = Arc::new(Mutex::new(mode));
         let (outbox, batches) = mpsc::channel();
-        let thread = std::thread::Builder::new()
-            .name("codetags-watch".into())
-            .spawn(move || run(engine, &inbox, &outbox))
-            .map_err(|error| WatchError::Notify(notify::Error::io(error)))?;
+        let thread = {
+            let mode = Arc::clone(&mode);
+            let control = control.clone();
+            std::thread::Builder::new()
+                .name("codetags-watch".into())
+                .spawn(move || run(engine, &inbox, &outbox, &control, &mode))
+                .map_err(|error| WatchError::Notify(notify::Error::io(error)))?
+        };
         Ok(Self {
             root: canonical,
+            mode,
             control,
             batches,
             thread: Some(thread),
+            #[cfg(unix)]
+            helper,
         })
     }
 
     /// The canonical root that batch paths are relative to.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Where the events come from now: the helper, or notify. It changes
+    /// from the helper to notify if the helper goes away.
+    pub fn mode(&self) -> WatchMode {
+        match self.mode.lock() {
+            Ok(mode) => mode.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     /// Asks for a rescan, as an overflow does: the project is scanned, and
@@ -416,21 +561,38 @@ impl std::fmt::Debug for Watcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Watcher")
             .field("root", &self.root)
+            .field("mode", &self.mode())
             .finish_non_exhaustive()
     }
 }
 
 impl Drop for Watcher {
     fn drop(&mut self) {
+        // Stop the thread first, so the helper's hang-up is not taken for a
+        // lost helper.
         let _ = self.control.send(Message::Stop);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        #[cfg(unix)]
+        if let Some(helper) = self.helper.take() {
+            helper.shutdown();
         }
     }
 }
 
 /// The watcher thread: feeds events to the engine and sends due batches.
-fn run(mut engine: Engine, inbox: &Receiver<Message>, outbox: &Sender<Result<Batch, WatchError>>) {
+/// `control` is the thread's own inbox, for notify's events if it has to
+/// switch from the helper to notify.
+fn run(
+    mut engine: Engine,
+    inbox: &Receiver<Message>,
+    outbox: &Sender<Result<Batch, WatchError>>,
+    control: &Sender<Message>,
+    mode: &Mutex<WatchMode>,
+) {
+    #[cfg(not(unix))]
+    let _ = (control, mode);
     loop {
         let now = Instant::now();
         let mut wait = engine
@@ -442,6 +604,8 @@ fn run(mut engine: Engine, inbox: &Receiver<Message>, outbox: &Sender<Result<Bat
         }
         let result = match inbox.recv_timeout(wait) {
             Ok(Message::Event(event)) => engine.handle(Instant::now(), event),
+            #[cfg(unix)]
+            Ok(Message::Helper(notice)) => helper_notice(&mut engine, notice, control, mode),
             Ok(Message::Rescan) => engine.rescan(Instant::now(), RescanCause::Requested),
             Ok(Message::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => Ok(()),
@@ -458,6 +622,37 @@ fn run(mut engine: Engine, inbox: &Receiver<Message>, outbox: &Sender<Result<Bat
             if outbox.send(Ok(batch)).is_err() {
                 return;
             }
+        }
+    }
+}
+
+/// Handles what the helper sent. If the connection failed, switches to
+/// notify and rescans, so nothing missed meanwhile is lost.
+#[cfg(unix)]
+fn helper_notice(
+    engine: &mut Engine,
+    notice: std::io::Result<Notice>,
+    control: &Sender<Message>,
+    mode: &Mutex<WatchMode>,
+) -> Result<(), WatchError> {
+    let now = Instant::now();
+    match notice {
+        Ok(Notice::Event(event)) => {
+            engine.hint(now, &event.path, event.kind == HelperKind::Modified)
+        }
+        Ok(Notice::Overflow) => engine.rescan(now, RescanCause::HelperOverflow),
+        Err(error) => {
+            let reason = format!("the privileged helper's connection ended ({error})");
+            engine.set_dirs(notify_dirs(&engine.root, control.clone())?);
+            let notify = WatchMode::Notify {
+                why_not_helper: reason.clone(),
+            };
+            log_mode(&engine.root, &notify);
+            match mode.lock() {
+                Ok(mut mode) => *mode = notify,
+                Err(poisoned) => *poisoned.into_inner() = notify,
+            }
+            engine.rescan(now, RescanCause::HelperLost(reason))
         }
     }
 }
@@ -808,5 +1003,139 @@ mod tests {
             engine.handle(Instant::now(), Err(error)),
             Err(WatchError::WatchLimit { .. })
         ));
+    }
+
+    /// A fake helper on a Unix socket: welcomes one client, accepts its
+    /// subscription, then sends what arrives on the returned channel, and
+    /// hangs up when that channel closes.
+    #[cfg(unix)]
+    fn fake_helper(dir: &Path) -> (PathBuf, mpsc::Sender<crate::privhelper::proto::Reply>) {
+        use crate::privhelper::proto::{Reply, Request, VERSION, read_frame};
+        use std::os::unix::net::UnixListener;
+        let socket = dir.join("helper.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (tx, rx) = mpsc::channel::<Reply>();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (tag, body) = read_frame(&mut stream).unwrap().unwrap();
+            assert_eq!(
+                Request::decode(tag, &body).unwrap(),
+                Request::Hello { version: VERSION }
+            );
+            Reply::Welcome {
+                version: VERSION,
+                backend: "fanotify".into(),
+            }
+            .write_to(&mut stream)
+            .unwrap();
+            let (tag, body) = read_frame(&mut stream).unwrap().unwrap();
+            let Request::Subscribe { root } = Request::decode(tag, &body).unwrap() else {
+                panic!("expected a subscription");
+            };
+            Reply::Accepted { root }.write_to(&mut stream).unwrap();
+            for reply in rx {
+                reply.write_to(&mut stream).unwrap();
+            }
+        });
+        (socket, tx)
+    }
+
+    /// Waits for batches until their merged changes equal `expected`.
+    #[cfg(unix)]
+    fn expect(watcher: &Watcher, expected: &[(&str, ChangeKind)]) -> Vec<Batch> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut seen = std::collections::BTreeMap::new();
+        let mut batches = Vec::new();
+        let expected: std::collections::BTreeMap<String, ChangeKind> = expected
+            .iter()
+            .map(|(path, kind)| (path.to_string(), *kind))
+            .collect();
+        while seen != expected {
+            assert!(Instant::now() < deadline, "saw {seen:?}, not {expected:?}");
+            if let Some(batch) = watcher.recv_timeout(Duration::from_millis(50)).unwrap() {
+                for change in &batch.changes {
+                    seen.insert(change.path.to_string_lossy().into_owned(), change.kind);
+                }
+                batches.push(batch);
+            }
+        }
+        batches
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_helper_falls_back_to_notify() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let config = WatchConfig {
+            helper: HelperSocket::At(dir.path().join("absent.sock")),
+            ..WatchConfig::default()
+        };
+        let watcher = Watcher::start(project.path(), config).unwrap();
+        let mode = watcher.mode();
+        assert_eq!(mode.source(), "notify");
+        assert!(
+            mode.to_string().contains("no privileged helper at"),
+            "{mode}"
+        );
+        write(project.path(), "a.rs", "x");
+        expect(&watcher, &[("a.rs", ChangeKind::Created)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_events_feed_the_coalescer_and_a_lost_helper_falls_back() {
+        use crate::privhelper::proto::{EventKind as Kind, HelperEvent, Reply};
+        let dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let (socket, helper) = fake_helper(dir.path());
+        let config = WatchConfig {
+            helper: HelperSocket::At(socket),
+            ..WatchConfig::default()
+        };
+        let watcher = Watcher::start(project.path(), config).unwrap();
+        assert_eq!(watcher.mode().source(), "fanotify");
+        let root = watcher.root().to_path_buf();
+
+        // Only the helper's events count: notify is not running, so a write
+        // the helper does not report is not seen until it does.
+        write(&root, "a.rs", "x");
+        assert!(
+            watcher
+                .recv_timeout(Duration::from_millis(500))
+                .unwrap()
+                .is_none()
+        );
+        helper
+            .send(Reply::Event(HelperEvent {
+                path: root.join("a.rs"),
+                kind: Kind::Created,
+                pid: Some(1),
+            }))
+            .unwrap();
+        expect(&watcher, &[("a.rs", ChangeKind::Created)]);
+
+        // An overflow rescans.
+        write(&root, "b.rs", "x");
+        helper.send(Reply::Overflow).unwrap();
+        let batches = expect(&watcher, &[("b.rs", ChangeKind::Created)]);
+        assert!(
+            batches
+                .iter()
+                .any(|b| b.rescan == Some(RescanCause::HelperOverflow))
+        );
+
+        // The helper goes away: the watcher rescans, and notify takes over.
+        write(&root, "c.rs", "x");
+        drop(helper);
+        let batches = expect(&watcher, &[("c.rs", ChangeKind::Created)]);
+        assert!(
+            batches
+                .iter()
+                .any(|b| matches!(b.rescan, Some(RescanCause::HelperLost(_))))
+        );
+        assert_eq!(watcher.mode().source(), "notify");
+        write(&root, "d.rs", "x");
+        expect(&watcher, &[("d.rs", ChangeKind::Created)]);
     }
 }

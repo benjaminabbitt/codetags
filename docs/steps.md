@@ -313,6 +313,39 @@ Then within {int} seconds the watcher reports {int} changed files in {string} an
 Then the watcher reports nothing for {int} seconds
 Then a batch the watcher reported was marked as a rescan
       # any batch since the watch started
+Then the watcher watches with {string}       # Watcher::mode's source: "notify", or the helper's backend ("fanotify")
+```
+
+## Privileged helper
+
+The helper steps run `codetags-privhelper` from the same target directory as
+the `codetags` binary (`just test-privileged` builds it). Steps that need
+root run `sudo -n`, so they work only where sudo needs no password: CI's
+`privileged-linux` job. The scenario itself, its watcher and its helper
+clients run as the unprivileged user. Anything a step creates as root is
+removed with `sudo -n` when the scenario ends, and the helper stops then.
+
+```gherkin
+Given no privileged helper is listening
+      # the watcher steps then try the helper at a socket path in the scratch
+      # directory that does not exist
+Given the privileged helper is running
+      # sudo -n codetags-privhelper --socket <new scratch dir>/privhelper.sock;
+      # waits for the socket; the watcher steps then use that socket
+Given the directory {string} in the project is readable only by root
+      # sudo -n: created owned by root, mode 0700
+Given a helper client is subscribed to the project
+      # connects to the running helper, subscribes to the project directory,
+      # and collects the events it sends
+When a helper client subscribes to {string} in the project   # a fresh client; the reply is kept
+When another process writes the file {string}
+      # a child `sh` writes it, as the unprivileged user; its PID is kept
+When root writes the file {string}            # sudo -n sh, writing the project-relative path
+Then within {int} seconds the helper reports a write to {string} by that process
+      # an event on that path whose writer PID is the last "another process"
+Then the helper reported nothing under {string}
+      # no event so far on a path strictly inside that project-relative directory
+Then the helper refuses the subscription
 ```
 
 ### Ingest into a generation (P1.3)

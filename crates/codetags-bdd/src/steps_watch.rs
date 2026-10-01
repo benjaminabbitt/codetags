@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use codetags_watch::{Batch, ChangeKind, CoalesceConfig, Coalescer, WatchConfig, Watcher, merge};
+use codetags_watch::{
+    Batch, ChangeKind, CoalesceConfig, Coalescer, HelperSocket, WatchConfig, Watcher, merge,
+};
 use cucumber::{given, then, when};
 
 use crate::CodetagsWorld;
@@ -27,6 +29,12 @@ pub struct WatchState {
     /// The running watcher. Declared before `project` so it stops before
     /// the project directory is deleted.
     watcher: Option<Watcher>,
+    /// The privileged helper the watcher tries (P4.4).
+    pub(crate) helper: HelperSocket,
+    /// Paths in the project that root created, removed with sudo before
+    /// the project directory is deleted.
+    #[cfg(unix)]
+    pub(crate) root_owned: RootOwned,
     /// The scratch directory holding the project.
     project: Option<tempfile::TempDir>,
     /// Writes so far, so each write's content differs.
@@ -35,6 +43,24 @@ pub struct WatchState {
     seen: BTreeMap<String, ChangeKind>,
     /// Whether any batch since the watch started was a rescan.
     rescanned: bool,
+}
+
+/// Paths root created in a scenario (P4.4), removed with `sudo -n rm -rf`
+/// when the scenario ends, since the unprivileged test cannot remove them.
+#[cfg(unix)]
+#[derive(Debug, Default)]
+pub(crate) struct RootOwned(pub(crate) Vec<PathBuf>);
+
+#[cfg(unix)]
+impl Drop for RootOwned {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::process::Command::new("sudo")
+                .args(["-n", "rm", "-rf", "--"])
+                .arg(path)
+                .status();
+        }
+    }
 }
 
 /// Parses a *changes* string: `kind:path` tokens, as a sorted map.
@@ -81,7 +107,7 @@ impl WatchState {
         self.coalescer().1 + Duration::from_millis(ms)
     }
 
-    fn project(&mut self) -> &Path {
+    pub(crate) fn project(&mut self) -> &Path {
         self.project
             .get_or_insert_with(|| tempfile::tempdir().expect("create project dir"))
             .path()
@@ -285,7 +311,11 @@ fn project_numbered(world: &mut CodetagsWorld, count: usize, dir: String) {
 #[given("the project is being watched")]
 fn watched(world: &mut CodetagsWorld) {
     let root = world.watch.project().to_path_buf();
-    let watcher = Watcher::start(&root, WatchConfig::default())
+    let config = WatchConfig {
+        helper: world.watch.helper.clone(),
+        ..WatchConfig::default()
+    };
+    let watcher = Watcher::start(&root, config)
         .unwrap_or_else(|error| panic!("start watching {}: {error}", root.display()));
     world.watch.watcher = Some(watcher);
 }
@@ -383,4 +413,10 @@ fn reports_nothing(world: &mut CodetagsWorld, seconds: u64) {
 #[then("a batch the watcher reported was marked as a rescan")]
 fn reported_rescan(world: &mut CodetagsWorld) {
     assert!(world.watch.rescanned, "no batch was marked as a rescan");
+}
+
+#[then(expr = "the watcher watches with {string}")]
+fn watches_with(world: &mut CodetagsWorld, source: String) {
+    let mode = world.watch.watcher().mode();
+    assert_eq!(mode.source(), source, "the watcher watches with {mode}");
 }

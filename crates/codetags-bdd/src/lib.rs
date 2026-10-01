@@ -17,6 +17,7 @@ mod steps_index_ts;
 mod steps_model;
 mod steps_mount;
 mod steps_names;
+mod steps_privhelper;
 mod steps_query;
 mod steps_store;
 mod steps_watch;
@@ -102,6 +103,11 @@ pub struct CodetagsWorld {
     // P4.1, P4.2 (codetags-watch): state for features/watch/.
     /// The coalescer, the watcher, and its project directory.
     watch: steps_watch::WatchState,
+    // P4.4 (codetags-privhelper): state for features/watch/privhelper.feature.
+    /// The helper started with sudo, and a client of it. Declared after
+    /// `watch`, so the watcher stops before the helper does.
+    #[cfg(unix)]
+    privhelper: steps_privhelper::HelperState,
 }
 
 impl CodetagsWorld {
