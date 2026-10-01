@@ -1,0 +1,9 @@
+# Committed cargo configuration. It applies to `just`, plain cargo, and
+# rust-analyzer alike.
+
+[env]
+# Link the prebuilt libduckdb (PLAN.md §4, R1; docs/verification.md V29).
+# libduckdb-sys downloads the release library for the target into
+# target/duckdb-download and copies it into target/<profile>/deps. Without
+# this, a build without `bundled-duckdb` probes the system for a libduckdb.
+DUCKDB_DOWNLOAD_LIB = "1"

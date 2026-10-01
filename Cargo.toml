@@ -29,7 +29,10 @@ codetags-bdd = { path = "crates/codetags-bdd" }
 # External crates. Pins and rationale: PLAN.md §4.
 # tagma is pinned by full SHA; `just dev-tagma PATH` overrides it locally.
 tagma-core = { git = "https://github.com/benjaminabbitt/tagma", rev = "b1ae80880a26ef4fbb620280825abe593a925861" }
-duckdb = { version = "~1.10506", features = ["bundled"] }
+# No `bundled` here (R1): development and CI link the prebuilt libduckdb that
+# libduckdb-sys downloads when DUCKDB_DOWNLOAD_LIB=1 (.cargo/config.toml, V29).
+# Release builds enable codetags-model's `bundled-duckdb` for a static build.
+duckdb = "~1.10506"
 cucumber = "0.23"
 futures = "0.3"
 regex = "1"

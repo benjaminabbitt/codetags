@@ -421,7 +421,7 @@ codetags/
 |---|---|---|
 | Rust | `rust-toolchain.toml` 1.96.x, edition 2024 | 1.96.1 on the dev host |
 | tagma-core | git `benjaminabbitt/tagma` at the full SHA of `b1ae808`, the first BSD-3-Clause commit | Local override: `just dev-tagma PATH` writes an ignored `.cargo/config.toml` `[patch]`. |
-| duckdb | `~1.10506` (DuckDB 1.5.6), feature `bundled` | Static build, so no runtime DLL. Windows needs a short `CARGO_TARGET_DIR` and `+crt-static` (V8). |
+| duckdb | `~1.10506` (DuckDB 1.5.6), default features (V29) | **Development and CI** link the prebuilt dynamic library (R1, V29):<br>• The committed `.cargo/config.toml` sets `DUCKDB_DOWNLOAD_LIB=1`, so `just`, plain cargo and rust-analyzer all use it.<br>• libduckdb-sys downloads the release library into `target/duckdb-download/` and copies it into `target/<profile>/deps`. Cargo puts that directory on the runtime library path for tests and `cargo run`.<br>• A binary that links DuckDB, run outside cargo, does not find the library: there is no rpath.<br>**Release builds** enable `codetags-model`'s `bundled-duckdb` feature (`duckdb/bundled`). It is a static build, so there is no runtime DLL, but it compiles DuckDB's C++ for about 12 minutes. On Windows it needs a short `CARGO_TARGET_DIR` and `+crt-static` (V8). |
 | cucumber | 0.23 | Latest as of 2026-09-30; tagma pins 0.21.1 |
 | fuser | 0.18 | V11 |
 | `nfsserve` or `nfs3_server` | chosen in spike S2 | V13 |
@@ -654,7 +654,7 @@ This no longer gates anything (D2).
 
 | ID | Risk | Mitigation |
 |---|---|---|
-| R1 | The bundled DuckDB build is slow, especially on Windows CI. | Caching. Fallback: `download-lib`, shipping the DLL beside the binary. |
+| R1 | The bundled DuckDB build is slow, especially on Windows CI. | Development and CI never compile DuckDB. They link the prebuilt library through `DUCKDB_DOWNLOAD_LIB` (§4, V29), so a cold `just check` takes about 1.5 minutes on the dev host, with no C++ compile. Only release builds enable `bundled-duckdb`. CI runs `cargo clean -p libduckdb-sys` after restoring its cache, because rust-cache prunes the downloaded library (V29). Residual risks: the download needs network on a cold `target/`, and it is not checksummed. |
 | R2 | A provider does not run on some OS (e.g. scip-go, scip-python or Jelly on Windows). | V20; a per-OS exception approved by the human. |
 | R3 | tagma is in-memory with String keys, so it may not scale in memory or rebuild time. | O-3. Alternative: compile postfix queries to SQL over a DuckDB tag table, validated by tagma's own conformance features. |
 | R4 | The macOS NFS client caches despite `actimeo=0`, e.g. negative-name caching. | Spike S2 measures it. |

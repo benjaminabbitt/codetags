@@ -11,6 +11,12 @@ publish.workspace = true
 [dependencies]
 duckdb.workspace = true
 
+[features]
+# Compile DuckDB from source and link it statically. For release builds only:
+# it takes about 12 minutes cold. Development and CI use the prebuilt library
+# (PLAN.md §4, R1).
+bundled-duckdb = ["duckdb/bundled"]
+
 [dev-dependencies]
 tempfile.workspace = true
 
