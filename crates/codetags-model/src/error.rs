@@ -37,6 +37,14 @@ pub enum StoreError {
         /// The index directory.
         index: PathBuf,
     },
+    /// The generation has no completion marker: it is still being written,
+    /// its writer died, or GC has begun to remove it.
+    NotComplete {
+        /// The index directory.
+        index: PathBuf,
+        /// The generation asked for.
+        number: u64,
+    },
 }
 
 impl fmt::Display for StoreError {
@@ -68,6 +76,11 @@ impl fmt::Display for StoreError {
             Self::NoGeneration { index } => {
                 write!(f, "{} holds no complete generation", index.display())
             }
+            Self::NotComplete { index, number } => write!(
+                f,
+                "generation {number} in {} is not complete",
+                index.display()
+            ),
         }
     }
 }
@@ -85,5 +98,13 @@ impl std::error::Error for StoreError {
 impl From<duckdb::Error> for StoreError {
     fn from(error: duckdb::Error) -> Self {
         Self::Duckdb(error)
+    }
+}
+
+impl StoreError {
+    /// Wraps an I/O error with the path it concerns.
+    pub(crate) fn io(path: impl Into<PathBuf>) -> impl FnOnce(io::Error) -> Self {
+        let path = path.into();
+        move |source| Self::Io { path, source }
     }
 }

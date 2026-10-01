@@ -63,6 +63,36 @@ Then reading {string} through the mount gives {string}   # file name in the moun
 Then the mount directory is empty again
 ```
 
+## Generation store
+
+The index directory is a fresh `.codetags/index/` per scenario. The files a
+generation "records" are the paths in its `file` table. "Another process" and
+"a writer process" run in a child process, as in the DuckDB steps above, so
+`Then that process reads exactly {string}` applies to them too.
+
+```gherkin
+Given an index with one complete generation per file in {string}
+      # whitespace-separated paths; generation k records only the k-th path
+Given an index whose newest complete generation has schema version {int}
+Given a reader has opened the newest complete generation   # held by this process
+Given a writer has begun a generation                      # held by this process, with write.lock
+Given a writer process exits before completing a generation recording the files {string}
+      # the child dies mid-write: no close, no completion marker
+When another process writes a generation recording the files {string}
+      # whitespace-separated paths; the child prints the generation number it completed
+When another process opens the newest complete generation and lists its files
+      # the child prints the sorted, space-joined paths
+When the reader switches to the newest complete generation
+When the index is garbage-collected
+Then that process completes generation {int}
+Then that process fails with an error matching {string}    # Rust `regex` syntax, against stderr
+Then the reader reads the files {string}                   # space-joined paths, sorted
+Then the generation the reader held before the switch reads the files {string}
+Then the index holds only the generations {string}
+      # space-joined numbers, ascending: exactly these are complete, and no
+      # other generation has any file left in the index directory
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

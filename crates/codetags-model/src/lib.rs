@@ -6,16 +6,39 @@
 //!
 //! Generations are immutable and are rebuilt, never migrated: see [`schema`].
 
+//!
+//! # The generation store
+//!
+//! [`GenerationStore`] manages the generations in one index directory:
+//!
+//! - [`GenerationStore::begin`] takes the index's `write.lock` and creates
+//!   generation N+1 as `gen-<N+1>.duckdb`; [`GenerationWriter::complete`]
+//!   closes it and writes `gen-<N+1>.complete` last. A second writer, in any
+//!   process, is refused with [`StoreError::WriterBusy`]: concurrent writers
+//!   are not supported.
+//! - [`GenerationStore::open_newest`] and [`GenerationStore::reader`] open the
+//!   newest complete generation read-only. Generations without a marker,
+//!   such as one whose writer crashed, are never opened.
+//! - [`GenerationStore::gc`] keeps the newest two complete generations and
+//!   deletes everything else, retrying failed deletions at the next GC.
+
 mod error;
+mod names;
+mod reader;
 pub mod schema;
+mod store;
+mod writer;
 
 use std::path::Path;
 
-use duckdb::{AccessMode, Config, Connection};
+use duckdb::{AccessMode, Config};
 
-pub use duckdb::Error;
+pub use duckdb::{Connection, Error};
 pub use error::StoreError;
+pub use reader::{Generation, GenerationReader};
 pub use schema::SCHEMA_VERSION;
+pub use store::{GcReport, GenerationStore};
+pub use writer::GenerationWriter;
 
 /// Opens the database at `path` for writing, creating it if absent.
 ///

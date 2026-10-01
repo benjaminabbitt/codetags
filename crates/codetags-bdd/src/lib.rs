@@ -13,6 +13,7 @@ mod steps_cli;
 mod steps_model;
 mod steps_mount;
 mod steps_query;
+mod steps_store;
 mod tags;
 
 use std::ffi::OsString;
@@ -73,6 +74,12 @@ pub struct CodetagsWorld {
     tagma: tagma_core::Index,
     /// Result of the last tagma query.
     matched: Option<Result<Vec<String>, String>>,
+    /// The generation reader a store step opened.
+    reader: Option<codetags_model::GenerationReader>,
+    /// The generation the reader served before it last switched.
+    held: Option<std::sync::Arc<codetags_model::Generation>>,
+    /// A generation writer this process holds open, with its write lock.
+    writer: Option<codetags_model::GenerationWriter>,
 }
 
 impl CodetagsWorld {

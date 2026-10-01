@@ -39,20 +39,25 @@ pub(crate) fn spawn(database: &std::path::Path, job: Job<'_>) -> CommandOutcome 
     command.output().expect("spawn child process").into()
 }
 
+/// Runs the child job `mode` in a fresh process, with the extra environment
+/// `env`. Other step modules define their modes in their own `child` function.
+pub(crate) fn spawn_mode(mode: &str, env: &[(&str, &std::ffi::OsStr)]) -> CommandOutcome {
+    let exe = std::env::current_exe().expect("locate the test executable");
+    let mut command = Command::new(exe);
+    command.env(MODE_ENV, mode).envs(env.iter().copied());
+    command.output().expect("spawn child process").into()
+}
+
 /// If this process was started as a child, does its job and exits; otherwise
 /// returns immediately. Call it first thing in the runner's `main`.
 pub fn maybe_run_child() {
     let Ok(mode) = std::env::var(MODE_ENV) else {
         return;
     };
-    let database = PathBuf::from(std::env::var(DB_ENV).expect("child needs a database path"));
-    let table = std::env::var(TABLE_ENV).expect("child needs a table");
-    let table = crate::steps_model::identifier(&table);
     let result = match mode.as_str() {
-        "duckdb-list" => list(&database, table),
-        "duckdb-insert" => {
-            let value = std::env::var(VALUE_ENV).expect("child needs a value");
-            insert(&database, table, &value)
+        "duckdb-list" | "duckdb-insert" => duckdb_job(&mode),
+        store if store.starts_with(crate::steps_store::CHILD_PREFIX) => {
+            crate::steps_store::child(store)
         }
         other => Err(format!("unknown child mode {other:?}")),
     };
@@ -65,6 +70,19 @@ pub fn maybe_run_child() {
             eprintln!("{error}");
             exit(FAILED)
         }
+    }
+}
+
+/// The DuckDB model-layer jobs (`steps_model`).
+fn duckdb_job(mode: &str) -> Result<String, String> {
+    let database = PathBuf::from(std::env::var(DB_ENV).expect("child needs a database path"));
+    let table = std::env::var(TABLE_ENV).expect("child needs a table");
+    let table = crate::steps_model::identifier(&table);
+    if mode == "duckdb-list" {
+        list(&database, table)
+    } else {
+        let value = std::env::var(VALUE_ENV).expect("child needs a value");
+        insert(&database, table, &value)
     }
 }
 
