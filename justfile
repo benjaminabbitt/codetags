@@ -80,10 +80,11 @@ tags-check:
 # --- capability-gated suites ---------------------------------------------
 
 # Mount features against this OS's live backend (P0b, P5): the bdd suite with
-# the `mount` capability enabled. Needs /dev/fuse and a setuid fusermount3 on
-# Linux; `codetags doctor` explains what is missing.
+# the `mount` capability enabled, plus `winfsp` on Windows, whose backend needs
+# WinFsp installed. Needs /dev/fuse and a setuid fusermount3 on Linux;
+# `codetags doctor` explains what is missing.
 test-mount:
-    CODETAGS_BDD_CAPABILITIES=mount cargo test --workspace --test bdd
+    CODETAGS_BDD_CAPABILITIES={{ if os() == "windows" { "mount,winfsp" } else { "mount" } }} cargo test --workspace --test bdd
 
 # Index features against the fixtures (P1): the bdd suite with the
 # `providers` capability enabled. Run `setup-providers` first.
