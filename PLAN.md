@@ -704,6 +704,7 @@ This no longer gates anything (D2).
 | `baseline-check` | Edge-count regression: indexes each ingested provider fixture and diffs its per-file edge counts against `tests/baselines/` |
 | `baseline-update` | Rewrites `tests/baselines/` from fresh fixture indexes; deliberate, after reviewing the `baseline-check` diff |
 | `test-privileged` | Helper features (CI only) |
+| `test-claude` | M3 stage 0 (D16-D18): the `@claude` features, Claude Code's LSP client observed live, headless (needs `claude`, logged in or `ANTHROPIC_API_KEY`) |
 | `bench` | criterion |
 | `eval CONDITION` | Evaluation condition A, B or C |
 | `doctor` | Environment report: mount backend, helper, providers |

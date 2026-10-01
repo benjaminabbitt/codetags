@@ -151,6 +151,24 @@ test-privileged:
     cargo build --workspace --bins
     CODETAGS_BDD_CAPABILITIES=privileged cargo test --workspace --test bdd
 
+# Claude Code's LSP client, observed live (M3 stage 0, D16-D18;
+# features/lsp/claude-client.feature, docs/lsp-stage0.md): only the @claude
+# scenarios, with the `claude` capability. Cucumber's --tags filter replaces
+# the capability and platform filter, so this recipe checks the platform
+# itself. Needs `claude` on PATH, logged in (`claude auth login`) or with
+# ANTHROPIC_API_KEY set, git, and this toolchain's rust-analyzer. Each run
+# drives two short Haiku sessions, which cost real money. With
+# CODETAGS_BDD_CLAUDE_SAVE=DIR, saves the sanitized recordings under DIR (how
+# tests/fixtures/lsp is made).
+test-claude:
+    @if [ "{{ os() }}" = windows ]; then echo "test-claude: Linux and macOS only (the recorder plugin's wrapper is a sh script)"; exit 1; fi
+    @command -v claude >/dev/null 2>&1 || { echo "test-claude: claude is not on PATH; install Claude Code (https://code.claude.com/docs/en/setup)"; exit 1; }
+    @if [ -z "${ANTHROPIC_API_KEY:-}" ] && ! claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then echo "test-claude: Claude Code is not logged in; run: claude auth login (or set ANTHROPIC_API_KEY)"; exit 1; fi
+    @rustup which rust-analyzer >/dev/null 2>&1 || { echo "test-claude: no rust-analyzer for this toolchain; add it with: rustup component add rust-analyzer"; exit 1; }
+    @echo "test-claude: $(claude --version)"
+    cargo build --workspace --bins --quiet
+    CODETAGS_BDD_CAPABILITIES=claude cargo test --workspace --test bdd -- --tags @claude
+
 bench:
     cargo bench --workspace
 
@@ -201,7 +219,7 @@ lsp-record-setup:
     @echo "Next (docs/lsp-stage0.md has the full runbook):"
     @echo "  1. Quit any Claude Code session in this repo. In the main checkout ($PWD), run: claude"
     @echo "     Accept the trust dialog if asked; /plugin should list codetags-lsp-recorder@codetags-local, enabled."
-    @echo "  2. Do the scripted actions in docs/lsp-stage0.md, section 3, then /exit."
+    @echo "  2. Do the scripted actions in docs/lsp-stage0.md, appendix A.3, then /exit."
     @echo "  3. Logs: .codetags/local/lsp-<UTC time>-<pid>.jsonl, one per server process. Summarize with:"
     @echo "     .codetags/local/bin/codetags-lsp analyze .codetags/local/lsp-<...>.jsonl"
 
