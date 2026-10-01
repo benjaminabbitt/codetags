@@ -489,16 +489,22 @@ mod m {
             .collect();
         assert_eq!(
             by_name.keys().copied().collect::<Vec<_>>(),
-            ["f", "helper", "m", "m.outer", "m.outer.inner"]
+            [
+                "demo.f",
+                "demo.helper",
+                "demo.m",
+                "demo.m.outer",
+                "demo.m.outer.inner"
+            ]
         );
-        let outer = by_name["m.outer"];
+        let outer = by_name["demo.m.outer"];
         assert_eq!(outer.kind, "function");
         assert_eq!(outer.file.as_deref(), Some("src/a.rs"));
         assert_eq!(outer.lines, Some((3, 8)));
-        assert_eq!(outer.modules, ["m"]);
+        assert_eq!(outer.modules, ["demo.m"]);
         assert!(!outer.external);
         // Defined nowhere, but in the project's package.
-        let f = by_name["f"];
+        let f = by_name["demo.f"];
         assert_eq!(
             (f.file.as_deref(), f.lines, f.external),
             (None, None, false)
@@ -523,25 +529,25 @@ mod m {
             .expect("push is a symbol");
         assert!(push.external);
         assert_eq!(push.package, "core");
-        assert_eq!(push.name, "vec.Vec.push");
-        assert_eq!(push.modules, ["vec"]);
+        assert_eq!(push.name, "core.vec.Vec.push");
+        assert_eq!(push.modules, ["core.vec"]);
     }
 
     #[test]
     fn colliding_names_are_reported_and_both_kept() {
         let mut index = index();
-        let other = "rust-analyzer cargo other 1.0 m/outer().";
+        let other = "rust-analyzer cargo demo 0.2.0 m/outer().";
         index.documents[0]
             .occurrences
             .push(reference(other, range(4, 8, 4, 9)));
         let analysis = analyze(&index, |_| Ok(SOURCE.as_bytes().to_vec())).unwrap();
         assert_eq!(analysis.collisions.len(), 1);
-        assert_eq!(analysis.collisions[0].name, "m.outer");
+        assert_eq!(analysis.collisions[0].name, "demo.m.outer");
         assert_eq!(
             analysis
                 .symbols
                 .iter()
-                .filter(|s| s.name == "m.outer")
+                .filter(|s| s.name == "demo.m.outer")
                 .count(),
             2
         );
@@ -574,8 +580,8 @@ mod m {
                 .find(|s| s.id == id)
                 .map(|s| s.name.clone())
         };
-        assert_eq!(name(&field).as_deref(), Some("m.S.f+field"));
-        assert_eq!(name(&getter).as_deref(), Some("m.S.f"));
+        assert_eq!(name(&field).as_deref(), Some("demo.m.S.f+field"));
+        assert_eq!(name(&getter).as_deref(), Some("demo.m.S.f"));
         assert!(analysis.collisions.is_empty(), "{:?}", analysis.collisions);
         // The block is no caller: `helper` on line 7 is still `outer`'s.
         assert!(analysis.sites.iter().all(|s| s.caller != block));

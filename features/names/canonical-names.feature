@@ -1,30 +1,34 @@
 Feature: Canonical symbol names are dotted and keep their real characters
   A symbol's canonical name is the dotted path of its SCIP descriptors,
-  without the package (PLAN.md §2.7, D15). Separators and Rust `::` become
+  without the package (PLAN.md §2.7, D15), except that a Rust name starts
+  with its crate (P1.3c, a default pending human review). Separators and Rust `::` become
   `.`, a package path's `/` becomes `.`, and an overload disambiguator
   `(+N)` becomes `+N`. Nothing else is escaped. The exact SCIP symbol stays
   in DuckDB, so a canonical name only has to be unique.
 
   The symbols below were emitted by rust-analyzer 1.96.1, scip-go 0.2.7,
   scip-typescript 0.4.0 and scip-python 0.6.6 for small demo projects (V38),
-  except the overload row, which follows SCIP's documented `(+N)` form.
+  except the overload row, which follows SCIP's documented `(+N)` form, and
+  the `codetags-model` rows, from this repo's own index.
 
   Scenario Outline: Each indexer's symbols have readable canonical names
     When the canonical name of the SCIP symbol "<symbol>" is taken
     Then the canonical name is "<canonical>"
 
     Examples: rust-analyzer
-      | symbol                                                                              | canonical                         |
-      | rust-analyzer cargo demo 0.1.0 billing/Charge#                                      | billing.Charge                    |
-      | rust-analyzer cargo demo 0.1.0 billing/Charge#amount.                               | billing.Charge.amount             |
-      | rust-analyzer cargo demo 0.1.0 billing/Apply#apply().                               | billing.Apply.apply               |
-      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`]new().                     | billing.Charge<T>.new             |
-      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`][Apply]apply().            | billing.Charge<T>.Apply.apply     |
-      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<u8>`][`From<u8>`]from().       | billing.Charge<u8>.From<u8>.from  |
-      | rust-analyzer cargo demo 0.1.0 billing/impl#[`inner::Fee`][Apply]apply().           | billing.inner.Fee.Apply.apply     |
-      | rust-analyzer cargo demo 0.1.0 billing/inner/Fee#                                   | billing.inner.Fee                 |
-      | rust-analyzer cargo demo 0.1.0 charge!                                              | charge                            |
-      | rust-analyzer cargo demo 0.1.0 `r#type`().                                          | r#type                            |
+      | symbol                                                                        | canonical                             |
+      | rust-analyzer cargo demo 0.1.0 billing/Charge#                                | demo.billing.Charge                   |
+      | rust-analyzer cargo demo 0.1.0 billing/Charge#amount.                         | demo.billing.Charge.amount            |
+      | rust-analyzer cargo demo 0.1.0 billing/Apply#apply().                         | demo.billing.Apply.apply              |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`]new().               | demo.billing.Charge<T>.new            |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`][Apply]apply().      | demo.billing.Charge<T>.Apply.apply    |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<u8>`][`From<u8>`]from(). | demo.billing.Charge<u8>.From<u8>.from |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[`inner::Fee`][Apply]apply().     | demo.billing.inner.Fee.Apply.apply    |
+      | rust-analyzer cargo demo 0.1.0 billing/inner/Fee#                             | demo.billing.inner.Fee                |
+      | rust-analyzer cargo demo 0.1.0 charge!                                        | demo.charge                           |
+      | rust-analyzer cargo demo 0.1.0 `r#type`().                                    | demo.r#type                           |
+      | rust-analyzer cargo codetags-model 0.1.0 store/GenerationStore#               | codetags_model.store.GenerationStore  |
+      | rust-analyzer cargo codetags-model 0.1.0 crate/                               | codetags_model                        |
 
     Examples: scip-go
       | symbol                                                                                    | canonical                                  |
@@ -65,15 +69,15 @@ Feature: Canonical symbol names are dotted and keep their real characters
       | rust-analyzer cargo demo 0.1.0 charge!                     |
       | rust-analyzer cargo demo 0.1.0 charge().                   |
       | rust-analyzer cargo demo 0.1.0 billing/Charge#             |
-      | rust-analyzer cargo other 0.2.0 billing/Charge#            |
+      | rust-analyzer cargo demo 0.2.0 billing/Charge#             |
       | rust-analyzer cargo demo 0.1.0 billing/Apply#apply().      |
     When their canonical names are assigned
     Then the collisions are:
-      | name           | symbol                                          |
-      | charge         | rust-analyzer cargo demo 0.1.0 charge!          |
-      | charge         | rust-analyzer cargo demo 0.1.0 charge().        |
-      | billing.Charge | rust-analyzer cargo demo 0.1.0 billing/Charge#  |
-      | billing.Charge | rust-analyzer cargo other 0.2.0 billing/Charge# |
+      | name                | symbol                                         |
+      | demo.charge         | rust-analyzer cargo demo 0.1.0 charge!         |
+      | demo.charge         | rust-analyzer cargo demo 0.1.0 charge().       |
+      | demo.billing.Charge | rust-analyzer cargo demo 0.1.0 billing/Charge# |
+      | demo.billing.Charge | rust-analyzer cargo demo 0.2.0 billing/Charge# |
 
   Scenario: The same symbol twice is not a collision
     Given these SCIP symbols:
@@ -85,45 +89,65 @@ Feature: Canonical symbol names are dotted and keep their real characters
 
   # P1.3c (dogfooding): the policies below are defaults pending human review.
 
+  Scenario: Rust names start with the crate, so two crates' paths do not collide
+    Given these SCIP symbols:
+      | symbol                                                        |
+      | rust-analyzer cargo codetags-mount-fuse 0.1.0 crate/          |
+      | rust-analyzer cargo codetags-mount-fuse 0.1.0 spike/          |
+      | rust-analyzer cargo codetags-mount-nfs 0.1.0 spike/           |
+      | rust-analyzer cargo codetags-mount-nfs 0.1.0 spike/HELLO_NAME. |
+      | rust-analyzer cargo codetags 0.1.0 main().                    |
+      | rust-analyzer cargo codetags-bdd 0.1.0 main().                |
+    When their canonical names are assigned
+    Then the assigned names are:
+      | symbol                                                        | name                                 |
+      | rust-analyzer cargo codetags-mount-fuse 0.1.0 crate/          | codetags_mount_fuse                  |
+      | rust-analyzer cargo codetags-mount-fuse 0.1.0 spike/          | codetags_mount_fuse.spike            |
+      | rust-analyzer cargo codetags-mount-nfs 0.1.0 spike/           | codetags_mount_nfs.spike             |
+      | rust-analyzer cargo codetags-mount-nfs 0.1.0 spike/HELLO_NAME. | codetags_mount_nfs.spike.HELLO_NAME |
+      | rust-analyzer cargo codetags 0.1.0 main().                    | codetags.main                        |
+      | rust-analyzer cargo codetags-bdd 0.1.0 main().                | codetags_bdd.main                    |
+    And there are no collisions
+
   Scenario Outline: A Rust impl block is a container and has no canonical name
     When the canonical name of the SCIP symbol "<symbol>" is taken
     Then the symbol has no canonical name
 
     Examples:
-      | symbol                                                          |
-      | rust-analyzer cargo demo 0.1.0 billing/impl#[Server]            |
+      | symbol                                                           |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[Server]             |
       | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`][Apply] |
 
   Scenario: A field that collides with a method is suffixed +field
     Given these SCIP symbols:
-      | symbol                                                         |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#                   |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#export_path.       |
+      | symbol                                                           |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#                     |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#export_path.         |
       | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]export_path(). |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#root.              |
-      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().      |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#root.                |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().        |
     When their canonical names are assigned
     Then the assigned names are:
-      | symbol                                                         | name                         |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#                   | spike.Server                 |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#export_path.       | spike.Server.export_path+field |
-      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]export_path(). | spike.Server.export_path   |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#root.              | spike.Server.root            |
-      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().      | spike.Server.stop            |
+      | symbol                                                           | name                                |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#                     | demo.spike.Server                   |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#export_path.         | demo.spike.Server.export_path+field |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]export_path(). | demo.spike.Server.export_path       |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#root.                | demo.spike.Server.root              |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().        | demo.spike.Server.stop              |
     And there are no collisions
 
   Scenario: A collision the +field suffix does not resolve is still reported
     Given these SCIP symbols:
-      | symbol                                                     |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#root.          |
-      | rust-analyzer cargo other 0.2.0 spike/Server#root.         |
-      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]root().  |
-      | rust-analyzer cargo demo 0.1.0 spike/Server#port.          |
-      | rust-analyzer cargo other 0.2.0 spike/Server#port.         |
+      | symbol                                                    |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#root.         |
+      | rust-analyzer cargo demo 0.2.0 spike/Server#root.         |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]root(). |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#port.         |
+      | rust-analyzer cargo demo 0.2.0 spike/Server#port.         |
     When their canonical names are assigned
     Then the collisions are:
-      | name                    | symbol                                             |
-      | spike.Server.root+field | rust-analyzer cargo demo 0.1.0 spike/Server#root.  |
-      | spike.Server.root+field | rust-analyzer cargo other 0.2.0 spike/Server#root. |
-      | spike.Server.port       | rust-analyzer cargo demo 0.1.0 spike/Server#port.  |
-      | spike.Server.port       | rust-analyzer cargo other 0.2.0 spike/Server#port. |
+      | name                         | symbol                                            |
+      | demo.spike.Server.root+field | rust-analyzer cargo demo 0.1.0 spike/Server#root. |
+      | demo.spike.Server.root+field | rust-analyzer cargo demo 0.2.0 spike/Server#root. |
+      | demo.spike.Server.port       | rust-analyzer cargo demo 0.1.0 spike/Server#port. |
+      | demo.spike.Server.port       | rust-analyzer cargo demo 0.2.0 spike/Server#port. |

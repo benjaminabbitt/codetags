@@ -12,6 +12,10 @@
 //!   targets. Each has its canonical name (PLAN.md §2.7, D15) and its dotted
 //!   module ancestors. Two symbols with one canonical name are both kept,
 //!   and reported in [`IngestReport::collisions`]; nothing is merged.
+//! - **Rust names start with the crate** (P1.3c; a default pending human
+//!   review): `billing.charge.double`, and `core.iter.…` for the standard
+//!   library. A module's ancestors are canonical names too
+//!   (`billing.charge`); the crate root is not one of them.
 //! - **Impl blocks are containers, not symbols** (P1.3c; a default pending
 //!   human review). rust-analyzer gives some impl blocks a symbol,
 //!   `impl#[Tree]` (V97), which would read as the type's name. It gets no

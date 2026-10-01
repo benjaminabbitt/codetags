@@ -135,17 +135,17 @@ fn symbols_carry_names_modules_and_lines() {
             "SELECT name || ' ' || kind || ' ' || file || ' ' || start_line::TEXT || '-'
                     || end_line::TEXT || ' ' || module || ' ' || modules::TEXT || ' '
                     || package || ' ' || external::TEXT
-             FROM symbol WHERE name = 'a.b.f'"
+             FROM symbol WHERE name = 'demo.a.b.f'"
         ),
-        "a.b.f function src/a/b.rs 1-3 a.b [a, a.b] demo false"
+        "demo.a.b.f function src/a/b.rs 1-3 demo.a.b [demo.a, demo.a.b] demo false"
     );
     assert_eq!(
         text(
             &db,
             "SELECT name || ' ' || kind || ' ' || coalesce(file, 'NULL') || ' ' || external::TEXT
-             FROM symbol WHERE name = 'a.b.g'"
+             FROM symbol WHERE name = 'demo.a.b.g'"
         ),
-        "a.b.g function NULL false"
+        "demo.a.b.g function NULL false"
     );
 }
 

@@ -3,16 +3,27 @@
 //! A canonical name is the dotted path of a symbol's SCIP descriptors,
 //! outermost first, keeping the names' **real characters**:
 //! `rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`]new().` is
-//! `billing.Charge<T>.new`. Nothing is escaped, and a canonical name is
+//! `demo.billing.Charge<T>.new`. Nothing is escaped, and a canonical name is
 //! never decoded: the exact SCIP symbol stays in DuckDB, so a canonical
 //! name only has to be unique, and [`CanonicalNames`] reports any two
 //! symbols that share one.
 //!
 //! Mapping decisions:
 //!
-//! - **Package and scheme are dropped.** The name is the descriptor path
-//!   alone (brief §4.5: `ordering.OrderRepo.save`). Two packages defining
-//!   the same path therefore collide, and the collision is reported.
+//! - **Package and scheme are dropped,** except for Rust. The name is the
+//!   descriptor path alone (brief §4.5: `ordering.OrderRepo.save`). Go
+//!   descriptors already carry the import path, and TypeScript and Python
+//!   descriptors the module path; two packages defining the same path
+//!   collide, and the collision is reported.
+//! - **A Rust name starts with its crate** (P1.3c; a default pending human
+//!   review), as Rust's own full paths do (`crate::module::Item`): the SCIP
+//!   package name with `-` mapped to `_`, as rustc does. So
+//!   `rust-analyzer cargo codetags-model 0.1.0 store/GenerationStore#` is
+//!   `codetags_model.store.GenerationStore`, and the crate's root module,
+//!   `crate/`, is `codetags_model`. This holds for every Rust symbol, not
+//!   only on a collision, so names are stable; without it, every crate's
+//!   `crate/` and every binary's `main()` collided (V98). A symbol with an
+//!   empty package name gets no prefix.
 //! - **Namespaces, types, terms, methods, metas and macros** each become one
 //!   segment carrying the descriptor's name. The suffix kind is dropped, so
 //!   a macro `charge!` and a function `charge()` collide; that is reported.
@@ -154,16 +165,29 @@ pub fn is_field(symbol: &GlobalSymbol) -> bool {
     }
 }
 
+/// Returns `true` for rust-analyzer's crate root module descriptor,
+/// `crate/`, which the crate segment replaces.
+fn is_rust_crate_root(d: &Descriptor) -> bool {
+    d.suffix == Suffix::Namespace && d.name == "crate"
+}
+
 fn global_segments(symbol: &GlobalSymbol) -> Option<Vec<Segment>> {
     if is_rust_impl_block(symbol) {
         return None;
     }
-    let mut out = Vec::with_capacity(symbol.descriptors.len());
+    let mut out = Vec::with_capacity(symbol.descriptors.len() + 1);
+    let rust = symbol.scheme == RUST_ANALYZER;
+    if rust && !symbol.package.name.is_empty() {
+        out.push(Segment {
+            name: symbol.package.name.replace('-', "_"),
+            disambiguator: None,
+        });
+    }
     for (index, d) in symbol.descriptors.iter().enumerate() {
         if d.suffix == Suffix::Parameter {
             return None;
         }
-        if is_rust_impl(symbol, index, d) {
+        if is_rust_impl(symbol, index, d) || (rust && index == 0 && is_rust_crate_root(d)) {
             continue;
         }
         out.push(Segment {
@@ -343,18 +367,37 @@ mod tests {
         let p = "rust-analyzer cargo demo 0.1.0 ";
         assert_eq!(
             name(&format!("{p}billing/impl#[`Charge<T>`][Apply]apply().")),
-            some("billing.Charge<T>.Apply.apply")
+            some("demo.billing.Charge<T>.Apply.apply")
         );
         assert_eq!(
             name(&format!("{p}billing/impl#[`Charge<T>`]new().")),
-            some("billing.Charge<T>.new")
+            some("demo.billing.Charge<T>.new")
         );
         assert_eq!(
             name(&format!("{p}billing/impl#[`inner::Fee`][Apply]apply().")),
-            some("billing.inner.Fee.Apply.apply")
+            some("demo.billing.inner.Fee.Apply.apply")
         );
         // Only rust-analyzer's impl blocks are rewritten.
         assert_eq!(name("other m n v impl#[T]f()."), some("impl.T.f"));
+    }
+
+    #[test]
+    fn rust_names_start_with_the_crate() {
+        let p = "rust-analyzer cargo codetags-model 0.1.0 ";
+        assert_eq!(
+            name(&format!("{p}store/GenerationStore#")),
+            some("codetags_model.store.GenerationStore")
+        );
+        assert_eq!(name(&format!("{p}crate/")), some("codetags_model"));
+        assert_eq!(name(&format!("{p}main().")), some("codetags_model.main"));
+        // Only a leading `crate/` is the root.
+        assert_eq!(
+            name(&format!("{p}a/crate/")),
+            some("codetags_model.a.crate")
+        );
+        // No package name, no prefix; other schemes keep none.
+        assert_eq!(name("rust-analyzer cargo . . a/f()."), some("a.f"));
+        assert_eq!(name("scip-go gomod demo v1 `x/y`/F()."), some("x.y.F"));
     }
 
     #[test]
@@ -366,7 +409,7 @@ mod tests {
         // Members of an impl block keep theirs.
         assert_eq!(
             name(&format!("{p}spike/impl#[Tree]Output#")),
-            some("spike.Tree.Output")
+            some("demo.spike.Tree.Output")
         );
         // Only rust-analyzer's.
         assert_eq!(name("other m n v impl#[T]"), some("impl.T"));
@@ -390,9 +433,9 @@ mod tests {
         let plain = format!("{p}spike/Server#root.");
         let names = assign(&[&field, &getter, &plain]);
         let assigned = names.assigned();
-        assert_eq!(assigned[&field], "spike.Server.export_path+field");
-        assert_eq!(assigned[&getter], "spike.Server.export_path");
-        assert_eq!(assigned[&plain], "spike.Server.root");
+        assert_eq!(assigned[&field], "demo.spike.Server.export_path+field");
+        assert_eq!(assigned[&getter], "demo.spike.Server.export_path");
+        assert_eq!(assigned[&plain], "demo.spike.Server.root");
         assert_eq!(names.collisions(), vec![]);
         assert_eq!(
             names
@@ -401,9 +444,9 @@ mod tests {
                 .map(|(n, _)| n)
                 .collect::<Vec<_>>(),
             [
-                "spike.Server.export_path",
-                "spike.Server.export_path+field",
-                "spike.Server.root"
+                "demo.spike.Server.export_path",
+                "demo.spike.Server.export_path+field",
+                "demo.spike.Server.root"
             ]
         );
     }

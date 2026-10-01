@@ -6,7 +6,9 @@ Feature: SCIP ingest into a generation
 
   Symbols are named by their canonical names (D15) in tables, and by their
   SCIP descriptors where a step says "descriptors". A call site's target is
-  the canonical name of its declared target.
+  the canonical name of its declared target. A Rust name starts with its
+  crate: the fixture's is `billing`, the standard library's `core` and
+  `alloc` (P1.3c, a default pending human review).
 
   Policies, documented in codetags_ingest::ingest:
   - a reference is attributed to the innermost enclosing definition, using
@@ -24,112 +26,112 @@ Feature: SCIP ingest into a generation
   Scenario: Project definitions become symbols with canonical names
     When the fixture "rust" is ingested into a new generation
     Then the generation's symbols include:
-      | name                         | descriptors                              | kind         | file          | lines | module | external |
-      | settle                       | settle().                                | function     | src/lib.rs    | 17-24 |        | no       |
-      | charge                       | charge/                                  | module       | src/charge.rs | 1-45  |        | no       |
-      | charge.double                | charge/double().                         | function     | src/charge.rs | 41-44 | charge | no       |
-      | charge.Apply.apply           | charge/Apply#apply().                    | trait_method | src/charge.rs | 5-6   | charge | no       |
-      | charge.Charge<T>.Apply.apply | charge/impl#[`Charge<T>`][Apply]apply(). | method       | src/charge.rs | 36-38 | charge | no       |
-      | charge.Fee.Apply.apply       | charge/impl#[Fee][Apply]apply().         | method       | src/charge.rs | 24-26 | charge | no       |
-      | ledger.Ledger.record         | ledger/impl#[Ledger]record().            | method       | src/ledger.rs | 11-14 | ledger | no       |
-      | macros.log_line              | macros/log_line!                         | macro        | src/macros.rs | 3-8   | macros | no       |
+      | name                                 | descriptors                              | kind         | file          | lines | module         | external |
+      | billing.settle                       | settle().                                | function     | src/lib.rs    | 17-24 |                | no       |
+      | billing.charge                       | charge/                                  | module       | src/charge.rs | 1-45  |                | no       |
+      | billing.charge.double                | charge/double().                         | function     | src/charge.rs | 41-44 | billing.charge | no       |
+      | billing.charge.Apply.apply           | charge/Apply#apply().                    | trait_method | src/charge.rs | 5-6   | billing.charge | no       |
+      | billing.charge.Charge<T>.Apply.apply | charge/impl#[`Charge<T>`][Apply]apply(). | method       | src/charge.rs | 36-38 | billing.charge | no       |
+      | billing.charge.Fee.Apply.apply       | charge/impl#[Fee][Apply]apply().         | method       | src/charge.rs | 24-26 | billing.charge | no       |
+      | billing.ledger.Ledger.record         | ledger/impl#[Ledger]record().            | method       | src/ledger.rs | 11-14 | billing.ledger | no       |
+      | billing.macros.log_line              | macros/log_line!                         | macro        | src/macros.rs | 3-8   | billing.macros | no       |
     And the symbols defined in "src/pipeline.rs" are exactly:
-      | name                 |
-      | pipeline             |
-      | pipeline.run         |
-      | pipeline.apply_dyn   |
-      | pipeline.transform   |
-      | pipeline.doubled_all |
+      | name                         |
+      | billing.pipeline             |
+      | billing.pipeline.run         |
+      | billing.pipeline.apply_dyn   |
+      | billing.pipeline.transform   |
+      | billing.pipeline.doubled_all |
     And the ingest reports no canonical-name collisions
 
   # P1.3c (dogfooding); defaults pending human review.
   Scenario: Impl blocks are not symbols, and a field named like its getter is suffixed
     When the fixture "rust" is ingested into a new generation
     Then the symbols defined in "src/ledger.rs" are exactly:
-      | name                        |
-      | ledger                      |
-      | ledger.Ledger               |
-      | ledger.Ledger.entries+field |
-      | ledger.Ledger.entries       |
-      | ledger.Ledger.record        |
-      | ledger.Ledger.line          |
-      | ledger.Ledger.with          |
+      | name                                |
+      | billing.ledger                      |
+      | billing.ledger.Ledger               |
+      | billing.ledger.Ledger.entries+field |
+      | billing.ledger.Ledger.entries       |
+      | billing.ledger.Ledger.record        |
+      | billing.ledger.Ledger.line          |
+      | billing.ledger.Ledger.with          |
     And the generation's symbols include:
-      | name                        | descriptors                        | kind   | file          | lines | module |
-      | ledger.Ledger.entries+field | ledger/Ledger#entries.             | field  | src/ledger.rs | 6-7   | ledger |
-      | ledger.Ledger.entries       | ledger/impl#[Ledger]entries().     | method | src/ledger.rs | 26-29 | ledger |
-      | charge.Charge.amount        | charge/Charge#amount.              | field  | src/charge.rs | 19-20 | charge |
+      | name                                | descriptors                    | kind   | file          | lines | module         |
+      | billing.ledger.Ledger.entries+field | ledger/Ledger#entries.         | field  | src/ledger.rs | 6-7   | billing.ledger |
+      | billing.ledger.Ledger.entries       | ledger/impl#[Ledger]entries(). | method | src/ledger.rs | 26-29 | billing.ledger |
+      | billing.charge.Charge.amount        | charge/Charge#amount.          | field  | src/charge.rs | 19-20 | billing.charge |
     And the symbols defined in "src/charge.rs" are exactly:
-      | name                         |
-      | charge                       |
-      | charge.Apply                 |
-      | charge.Apply.apply           |
-      | charge.Fee                   |
-      | charge.Fee.0                 |
-      | charge.Discount              |
-      | charge.Discount.0            |
-      | charge.Charge                |
-      | charge.Charge.payload        |
-      | charge.Charge.amount         |
-      | charge.Fee.Apply.apply       |
-      | charge.Discount.Apply.apply  |
-      | charge.Charge<T>.Apply.apply |
-      | charge.double                |
+      | name                                 |
+      | billing.charge                       |
+      | billing.charge.Apply                 |
+      | billing.charge.Apply.apply           |
+      | billing.charge.Fee                   |
+      | billing.charge.Fee.0                 |
+      | billing.charge.Discount              |
+      | billing.charge.Discount.0            |
+      | billing.charge.Charge                |
+      | billing.charge.Charge.payload        |
+      | billing.charge.Charge.amount         |
+      | billing.charge.Fee.Apply.apply       |
+      | billing.charge.Discount.Apply.apply  |
+      | billing.charge.Charge<T>.Apply.apply |
+      | billing.charge.double                |
     And the ingest reports no canonical-name collisions
 
   Scenario: Targets without a definition in the project are symbols too
     When the fixture "rust" is ingested into a new generation
     Then the generation's symbols include:
-      | name                        | descriptors                                   | kind   | file | lines | module | external |
-      | boxed.Box<T>.new            | boxed/impl#[`Box<T>`]new().                   | method |      |       | boxed  | yes      |
-      | macros.vec                  | macros/vec!                                   | macro  |      |       | macros | yes      |
-      | ledger.Ledger.Default.default | ledger/impl#[Ledger][Default]default().     | method |      |       | ledger | no       |
+      | name                                  | descriptors                             | kind   | file | lines | module         | external |
+      | alloc.boxed.Box<T>.new                | boxed/impl#[`Box<T>`]new().             | method |      |       | alloc.boxed    | yes      |
+      | alloc.macros.vec                      | macros/vec!                             | macro  |      |       | alloc.macros   | yes      |
+      | billing.ledger.Ledger.Default.default | ledger/impl#[Ledger][Default]default(). | method |      |       | billing.ledger | no       |
 
   Scenario: Calls are attributed to the innermost enclosing definition
     When the fixture "rust" is ingested into a new generation
     Then the call sites in "src/lib.rs" on line 21 are:
-      | caller | target       | kind | dispatch | external |
-      | settle | pipeline.run | call | static   | no       |
+      | caller         | target               | kind | dispatch | external |
+      | billing.settle | billing.pipeline.run | call | static   | no       |
     And the call sites in "src/pipeline.rs" on line 10 are:
-      | caller       | target                          | kind | dispatch | external |
-      | pipeline.run | pipeline.apply_dyn              | call | static   | no       |
-      | pipeline.run | boxed.Box<T, A>.AsRef<T>.as_ref | call | static   | yes      |
+      | caller               | target                                | kind | dispatch | external |
+      | billing.pipeline.run | billing.pipeline.apply_dyn            | call | static   | no       |
+      | billing.pipeline.run | alloc.boxed.Box<T, A>.AsRef<T>.as_ref | call | static   | yes      |
     And the call sites in "src/pipeline.rs" on line 11 are:
-      | caller       | target               | kind | dispatch | external |
-      | pipeline.run | ledger.Ledger.record | call | static   | no       |
+      | caller               | target                       | kind | dispatch | external |
+      | billing.pipeline.run | billing.ledger.Ledger.record | call | static   | no       |
     And the call sites in "src/pipeline.rs" on line 15 are:
-      | caller       | target             | kind | dispatch | external |
-      | pipeline.run | pipeline.transform | call | static   | no       |
+      | caller               | target                     | kind | dispatch | external |
+      | billing.pipeline.run | billing.pipeline.transform | call | static   | no       |
 
   Scenario: Trait calls resolve to the trait method and are virtual
     When the fixture "rust" is ingested into a new generation
     Then the call sites in "src/pipeline.rs" on line 20 are:
-      | caller             | target             | kind | dispatch | external |
-      | pipeline.apply_dyn | charge.Apply.apply | call | virtual  | no       |
+      | caller                     | target                     | kind | dispatch | external |
+      | billing.pipeline.apply_dyn | billing.charge.Apply.apply | call | virtual  | no       |
 
   Scenario: Functions used as values are call sites of kind value
     When the fixture "rust" is ingested into a new generation
     Then the call sites in "src/pipeline.rs" on line 13 are:
-      | caller       | target        | kind  | dispatch | external |
-      | pipeline.run | charge.double | value | static   | no       |
+      | caller               | target                | kind  | dispatch | external |
+      | billing.pipeline.run | billing.charge.double | value | static   | no       |
     And the call sites in "src/pipeline.rs" on line 30 are:
-      | caller               | target                             | kind  | dispatch | external |
-      | pipeline.doubled_all | slice.[T].iter                     | call  | static   | yes      |
-      | pipeline.doubled_all | iter.traits.iterator.Iterator.copied  | call  | virtual  | yes      |
-      | pipeline.doubled_all | iter.traits.iterator.Iterator.map     | call  | virtual  | yes      |
-      | pipeline.doubled_all | charge.double                      | value | static   | no       |
-      | pipeline.doubled_all | iter.traits.iterator.Iterator.collect | call  | virtual  | yes      |
+      | caller                       | target                                     | kind  | dispatch | external |
+      | billing.pipeline.doubled_all | core.slice.[T].iter                        | call  | static   | yes      |
+      | billing.pipeline.doubled_all | core.iter.traits.iterator.Iterator.copied  | call  | virtual  | yes      |
+      | billing.pipeline.doubled_all | core.iter.traits.iterator.Iterator.map     | call  | virtual  | yes      |
+      | billing.pipeline.doubled_all | billing.charge.double                      | value | static   | no       |
+      | billing.pipeline.doubled_all | core.iter.traits.iterator.Iterator.collect | call  | virtual  | yes      |
 
   Scenario: Macro invocations are call sites; the calls inside them are lost
     When the fixture "rust" is ingested into a new generation
     Then the call sites in "src/lib.rs" on line 22 are:
-      | caller | target          | kind  | dispatch | external |
-      | settle | macros.log_line | macro | static   | no       |
+      | caller         | target                  | kind  | dispatch | external |
+      | billing.settle | billing.macros.log_line | macro | static   | no       |
     And the call sites in "src/lib.rs" on line 19 are:
-      | caller | target           | kind  | dispatch | external |
-      | settle | macros.vec       | macro | static   | yes      |
-      | settle | boxed.Box<T>.new | call  | static   | yes      |
-      | settle | boxed.Box<T>.new | call  | static   | yes      |
+      | caller         | target                 | kind  | dispatch | external |
+      | billing.settle | alloc.macros.vec       | macro | static   | yes      |
+      | billing.settle | alloc.boxed.Box<T>.new | call  | static   | yes      |
+      | billing.settle | alloc.boxed.Box<T>.new | call  | static   | yes      |
 
   Scenario: Locals, operators, imports and non-callables are not call sites
     When the fixture "rust" is ingested into a new generation
@@ -158,13 +160,13 @@ Feature: SCIP ingest into a generation
   Scenario: The ingest report counts what it wrote and what it skipped
     When the fixture "rust" is ingested into a new generation
     Then the ingest report counts:
-      | what                         | count |
-      | files                        | 5     |
-      | symbols                      | 43    |
-      | call sites                   | 22    |
-      | local occurrences            | 71    |
-      | operator references          | 18    |
-      | references outside a definition | 1  |
+      | what                            | count |
+      | files                           | 5     |
+      | symbols                         | 43    |
+      | call sites                      | 22    |
+      | local occurrences               | 71    |
+      | operator references             | 18    |
+      | references outside a definition | 1     |
 
   Scenario: Re-indexing writes generation N+1 while N stays readable
     Given the fixture "rust" has been ingested into a new generation

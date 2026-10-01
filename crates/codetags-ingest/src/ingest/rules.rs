@@ -174,7 +174,9 @@ pub fn dispatch(symbol: &GlobalSymbol) -> Dispatch {
 
 /// The modules enclosing the symbol, outermost first, as dotted canonical
 /// names: the leading namespace descriptors before the symbol's own, so
-/// `a/b/f().` is in `a` and `a.b`, and the module `a/b/` is in `a`.
+/// `a/b/f().` is in `a` and `a.b`, and the module `a/b/` is in `a`. A Rust
+/// module's canonical name starts with its crate (`billing.a`, P1.3c); the
+/// crate root itself is not listed, so a symbol at the root has no module.
 pub fn modules(symbol: &GlobalSymbol) -> Result<Vec<String>, CanonicalError> {
     let own = symbol.descriptors.len().saturating_sub(1);
     let depth = symbol.descriptors[..own]
@@ -272,13 +274,18 @@ mod tests {
 
     #[test]
     fn modules_are_the_leading_namespaces_before_the_symbol() {
-        assert_eq!(modules(&global("a/b/f().")).unwrap(), ["a", "a.b"]);
-        assert_eq!(modules(&global("a/b/")).unwrap(), ["a"]);
+        // Canonical names, so they start with the crate (P1.3c); the crate
+        // root itself is not listed.
+        assert_eq!(
+            modules(&global("a/b/f().")).unwrap(),
+            ["billing.a", "billing.a.b"]
+        );
+        assert_eq!(modules(&global("a/b/")).unwrap(), ["billing.a"]);
         assert_eq!(modules(&global("crate/")).unwrap(), Vec::<String>::new());
         assert_eq!(modules(&global("settle().")).unwrap(), Vec::<String>::new());
         assert_eq!(
             modules(&global("charge/impl#[`Charge<T>`][Apply]apply().")).unwrap(),
-            ["charge"]
+            ["billing.charge"]
         );
         assert!(is_module(&global("a/b/"), None));
         assert!(!is_module(&global("a/b/f()."), None));
