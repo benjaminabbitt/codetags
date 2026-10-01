@@ -31,7 +31,7 @@ allow = [
 # - winfsp, winfsp-sys: GPL-3.0, for the Windows WinFsp backend (D9, V28;
 #   P0b S3). [bans] below keeps them beneath codetags-mount-winfsp. Windows
 #   binaries built with that backend are distributed under GPL-3.0.
-# - lspx: EUPL-1.2, its own crate only (P3.0); not yet added.
+# lspmux (EUPL-1.2) needs none: it is installed and run, never linked (D14).
 exceptions = [
     # The Unlicense (permissive, OSI-approved public-domain dedication), scoped
     # to the nfs3 crates under codetags-mount-nfs (P0b S2, V42). Pending the

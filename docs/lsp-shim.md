@@ -89,7 +89,7 @@ shim):
   `assert!` is never reached (R12, V4);
 - normalizes the root to the project root, for rust-analyzer the outermost
   Cargo workspace containing the crate (brief §4.2), **spelled as the client
-  spelled it** (the P3 draft's review question 5 default), in
+  spelled it** (D23; D26 changes this to the canonical root with URIs rewritten, not built yet, V132), in
   `workspaceFolders[0]`, `rootUri` and `rootPath`, and sets
   `CODETAGS_KEY_ROOT` to it (R10, R11);
 - takes `workspace.didChangeWatchedFiles` out of the client capabilities, and
@@ -123,7 +123,7 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
 
 - **Stage 3:** the watcher as an extra lspmux client (R40-R42); until then
   servers watch for themselves. `TODO(stage 3)` in `codetags_lsp::policy`.
-- **The readiness gate** (R38, P4.3).
+- **The readiness gate** (R38, P3.12).
 - **Configuration merge** (P3.6, R23, R34): an agent's shim answers `null`;
   `TODO(P3.6)` in `codetags_lsp::policy::from_server`.
 - **Crash recovery** (P3.7, R39): if lspmux's session ends unexpectedly the

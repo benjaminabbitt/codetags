@@ -34,7 +34,7 @@ of tagma's `PLAN.md`:
 8. **Verification:** verify every ⚠ before code depends on it (brief §6.4).
 9. **Performance:** no optimization without a benchmark that fails its target first.
 10. **Safety:**
-    - TCP listeners bind loopback only: the macOS NFS loopback backend (§2.8), and upstream lspmux's default (D14).
+    - TCP listeners bind loopback only: the macOS NFS loopback backend (§2.8), and lspmux on Windows (D17). On Linux and macOS lspmux listens on a Unix socket in a 0700 directory.
     - Never run a language server or indexer as root or admin.
     - The privileged helper never executes project code.
 11. **No silent skips.** Every scenario must run in at least one CI job, or be listed in `ci/expected-skips.txt`; this is enforced across jobs:
@@ -46,7 +46,7 @@ of tagma's `PLAN.md`:
 12. **Licence boundaries** (D9):
     - `just license-check` (cargo-deny) must pass.
     - Dependencies of the BSD-3 crates must be permissively licensed. No GPL, AGPL, LGPL or EUPL.
-    - EUPL-1.2 is allowed only in `lspx`, and nothing outside `lspx` may depend on it.
+    - No EUPL code is in this repo. lspmux (EUPL-1.2) is an installed, pinned tool that codetags runs and never links (D14, D19).
     - GPL-3.0 is allowed only for `winfsp` and `winfsp-sys`, and only beneath `codetags-mount-winfsp` (D9). A Windows release that includes it ships a GPL-3.0 notice.
     - Exceptions need human approval.
 
@@ -64,7 +64,7 @@ of tagma's `PLAN.md`:
 | D6 | **Users and agents can tag files**, and those tags are queryable alongside derived facts. | Resolves §4.5 [OPEN] (read-only vs writes): tags are writable, content stays read-only |
 | D7 | **Functionality is described in Gherkin** and run with cucumber. | §6 |
 | D8 | **All views go through a plugin engine** built here. That includes `files/`, cards, `README`, `FACETS`, graphs, and result-set renderings in `q/`. **Architecture diagrams (Mermaid)** are generated from the code as virtual files, as a plugin. | §4.5 (views become plugins; adds Mermaid beside `modules.dot`) |
-| D9 | **Licensing:** codetags is **BSD-3-Clause**, and `crates/lspx` stays **EUPL-1.2**, as lspmux requires. Hosting is not a concern, because this is developer tooling. No BSD crate or binary may link `lspx` code, since that would make it EUPL; `lspx` may depend on BSD crates. **GPL-3.0 is tolerated for the WinFsp backend** when it's the better choice, and it is (V28). The `winfsp` crate is allowed only under `codetags-mount-winfsp`, so Windows binaries built with that backend are distributed under GPL-3.0. Source and the Linux/macOS binaries stay BSD-3. | none (resolves O-1) |
+| D9 | **Licensing:** codetags is **BSD-3-Clause**, and `crates/lspx` stays **EUPL-1.2**, as lspmux requires. Hosting is not a concern, because this is developer tooling. No BSD crate or binary may link `lspx` code, since that would make it EUPL; `lspx` may depend on BSD crates. **GPL-3.0 is tolerated for the WinFsp backend** when it's the better choice, and it is (V28). The `winfsp` crate is allowed only under `codetags-mount-winfsp`, so Windows binaries built with that backend are distributed under GPL-3.0. Source and the Linux/macOS binaries stay BSD-3. *The `lspx` part is superseded by D14: there is no `crates/lspx`.* | none (resolves O-1) |
 | D10 | **Dogfood:** run codetags on this repo as soon as each piece can (milestones M1–M3, §6). | none |
 | D11 | **View and edit by tags, BATFS-style** (§2.10). **DRAFT, for review.** Query directories show the real source files; reads and writes go to those files, and filesystem operations in query directories add and remove tags. | Reverses brief §1's non-goal "editing code through views" for source files reached through tags. Derived views (`.skel`, cards, diagrams) stay read-only. Supersedes the O-6 and O-7 defaults. |
 | D12 | **Recursion guard** (§2.11). **DRAFT, for review.** Every mutating operation goes through one serialized queue, deletes are buffered, and a decaying counter detects recursive operations and holds them. | none |
@@ -78,12 +78,16 @@ of tagma's `PLAN.md`:
 | D20 | **`codetags lsp setup` is the only writer of `~/.config/lspmux/config.toml`** (2026-10-01). lspmux can't be pointed elsewhere. The command writes the D17 socket, a `pass_environment` allowlist and the instance timeout; it backs up any existing file, shows a diff, and never runs implicitly. `codetags doctor` reports drift. | answers lspmux question (d) |
 | D21 | **The shim starts `lspmux server` on demand** when its socket is missing, the same way on every OS; nothing is installed as a service (2026-10-01). | §3.4 of `docs/proxy-zero-change.md` |
 | D22 | **VS Code joins in stage 2,** alongside Claude Code (2026-10-01). This repo's `.vscode/settings.json` points `rust-analyzer.server.path` at the shim, and a scripted VS Code-style session is added to the tests. | M3 |
+| D23 | *Superseded by D26 the same day, on V132.* **The normalized root keeps the client's spelling** (2026-10-01; P3 draft question 5). The shim resolves the root to the project root, for rust-analyzer the outermost Cargo workspace, but spells it as the client spelled it, using `canonicalize` only to detect aliases. The server's root then matches the documents' URIs, and lspmux already shares one instance across spellings (V3). | brief §4.2 "canonicalize the root": the root is resolved, not canonicalized |
+| D24 | **All three configuration policies are in v1** (2026-10-01; P3 draft question 4): `Authority`, `Union` and `Strongest`. P3.6 therefore builds the cross-session coordinator that `Union` and `Strongest` need. | brief §4.2 `RouteKey`/`Union`/`Strongest`/`Authority`: none deferred |
+| D25 | **The P3.14 wiring scenarios are approved as drafted** (2026-10-01), including the two behaviour changes they propose: the sh wrapper checks that the shim can serve before using it, and `codetags doctor` reports an `lsp wiring:` line. | M3 |
+| D26 | **Supersedes D23: the shim canonicalizes the root, and rewrites URIs in both directions** (2026-10-01, on V132). The server is given the canonical project root. Each shim rewrites its own client's spelling to the canonical one in every message to the server, and back in every message to the client, so documents' URIs and the server's file watcher agree. On macOS, a checkout reached through a symlink otherwise never sees changes on disk (V132). | brief §4.2 "canonicalize the root", now as written |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
 The planning agent derived these from D1–D22 and from research. Each is a default the human may overturn.
 
-- **C1. Transport.** *Superseded by D14:* upstream lspmux's transport, loopback TCP by default. Cross-machine use goes through SSH TCP port forwarding (`ssh -L`), which works between any of the three OSes.
+- **C1. Transport.** *Superseded by D14 and D17:* lspmux's own transport, configured by `codetags lsp setup` (D20) as a Unix socket in a 0700 directory on Linux and macOS, and loopback TCP on Windows. Cross-machine use (O-11) goes through SSH forwarding (`ssh -L`); with D17's socket that means forwarding to a Unix socket ⚠ (not yet checked).
 - **C2. Watcher.**
   - The unprivileged baseline everywhere is `notify` (inotify / FSEvents / ReadDirectoryChangesW).
   - Privileged accelerators run through the optional helper: fanotify on Linux, the USN change journal on Windows.
@@ -141,9 +145,9 @@ Each phase below starts with a status line: ✅ done, ◐ partly done, ☐ not s
 
 ```
 per user ────────────────────────────────────────────────────────────────────────────────
-Claude Code ─stdio─> lspx shim ─┐
-VS Code     ─stdio─> lspx shim ─┴─ local socket ─> lspx daemon ─> language servers
-                                                    ▲ codetags-watch
+Claude Code ─stdio─> codetags-lsp shim ─┐
+VS Code     ─stdio─> codetags-lsp shim ─┴─ lspmux client ─ socket (D17) ─> lspmux server ─> language servers
+                                                                            ▲ codetags-watch, as one more lspmux client (stage 3, P3.8)
 codetags CLI ─── local socket ──> codetagsd
                                   ├─ codetags-watch ─> coalescer ─> provider runs ─> .codetags/index/gen-N
                                   ├─ tag store <── .codetags/tags   (committed text, C5)
@@ -155,8 +159,8 @@ codetags CLI ─── local socket ──> codetagsd
 optional, admin-installed: codetags-privhelper (fanotify | USN journal) ─> event stream to both daemons
 ```
 
-- **Two daemons.** `lspx` (proxy track) and `codetagsd` (index/views track) are separate processes. This keeps the tracks independent (brief §3), and a crash in a mount cannot kill LSP sessions.
-- **One watcher each.** Each daemon runs its own watcher from the shared `codetags-watch` crate. Merging the two watchers is an optimization and needs a benchmark first.
+- **Two daemons.** `lspmux server` (proxy track; upstream and unmodified, D14) and `codetagsd` (index/views track) are separate processes. This keeps the tracks independent (brief §3), and a crash in a mount cannot kill LSP sessions.
+- **One watcher each.** Each track runs its own watcher from the shared `codetags-watch` crate: `codetagsd` in-process, and the proxy track as an extra lspmux client (stage 3, P3.8), since lspmux itself is not ours. Merging the two watchers is an optimization and needs a benchmark first.
 - **The daemon is optional for batch work.** `codetags index` and `codetags views materialize` run standalone, and in CI, against the generation store.
 
 ### 2.2 Generation store (DuckDB)
@@ -239,7 +243,7 @@ optional, admin-installed: codetags-privhelper (fanotify | USN journal) ─> eve
 | Staleness control | `fuser` `Notifier` inval + short TTLs | no server push: `actimeo=0`, directory mtime bump per generation | WinFsp notify ⚠ |
 | Watcher (unprivileged) | inotify | FSEvents | ReadDirectoryChangesW |
 | Privileged accelerator | fanotify | none needed | USN change journal |
-| Proxy transport | loopback TCP (upstream lspmux, D14) | loopback TCP | loopback TCP |
+| Proxy transport | Unix socket in a 0700 directory (D17) | Unix socket in a 0700 directory (D17) | loopback TCP (D17) |
 | CI | ubuntu | macos (arm64) | windows, with and without WinFsp |
 
 Why the other candidates are not v1 backends:
@@ -280,7 +284,7 @@ Why the other candidates are not v1 backends:
 
 ### 2.8 Security
 
-- **Proxy transport (D14):** upstream lspmux, loopback TCP by default. Other local users can reach a loopback port, and language servers execute project code (brief §2), so on shared machines this is accepted exposure (O-20).
+- **Proxy transport (D14, D17):** lspmux's own transport, configured by `codetags lsp setup` (D20). On Linux and macOS it is a Unix socket in a 0700 directory, so only the user can connect. On Windows it is loopback TCP. Other local users can reach that port, the handshake names the program to run (V36), and language servers execute project code (brief §2), so on shared Windows machines this is accepted exposure (O-20; lspmux question b).
 - **The macOS NFS loopback** also listens on TCP.
   - It binds 127.0.0.1 on an ephemeral port, with an unguessable export path.
   - The only operations allowed are reads and tag creation.
@@ -411,8 +415,8 @@ Under a query directory `q/<Q>`, result groups become:
 ```
 codetags/
   Cargo.toml  rust-toolchain.toml  justfile  PLAN.md  providers.toml
-  docs/        BRIEF.md  verification.md  steps.md  path-profile.md  facets.md
-  features/    names/ path-profile/ tags/ views/ index/ cli/ proxy/ watch/ mount/
+  docs/        BRIEF.md  verification.md  steps.md  status.md  facets.md (generated)  spec-drafts/
+  features/    cli/ index/ lsp/ model/ mount/ names/ query/ watch/, and later tags/ views/ plugins/
   crates/
     codetags-model/         DuckDB schema, migrations, generation store
     codetags-names/         canonical names, path profile, collision suffixes (pure)
@@ -430,7 +434,6 @@ codetags/
     codetags/               CLI and codetagsd (bin)
     codetags-bdd/           cucumber runner and step definitions (test-only)
     codetags-lsp/           LSP shim between clients and upstream lspmux (M3), plus the stage-0 recorder and analyzer; no DuckDB (bin)
-    lspx/                   lspmux fork, EUPL-1.2 with its own LICENSE (bin), P3.0. Nothing else depends on it (D9)
   plugins/mermaid/          first declarative plugin (plugin.toml, *.sql, *.j2), shipped as a default
   tools/claude-plugins/     local Claude Code marketplace, enabled in .claude/settings.json (D18)
   tools/gocallgraph/        Go program: x/tools/go/callgraph (VTA/CHA) → JSONL
@@ -498,7 +501,7 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 - **Dogfood milestones** (D10):
   - **M1, static.** Once P1.4 (the Rust provider) and P2.5–P2.6 (materializer and CLI) are done, `just dogfood` indexes this repo and materializes its views. CI runs it, and development uses the views. This repo's own `.codetags/` is committed then.
   - **M2, live.** After P5.1, this repo's views are mounted while developing on Linux.
-  - **M3, proxy.** ◐ Stages 0–2 are done (2026-10-01). Once a human runs `just setup-lspmux` and `just lsp-setup`, this repo's rust-analyzer runs through `codetags-lsp` and lspmux, shared by Claude Code and VS Code. Stage 3 (the watcher client) isn't needed for rust-analyzer (V126). What remains is P3.12 and P3.13.
+  - **M3, proxy.** ◐ Stages 0–2 are done (2026-10-01). After `just setup-lspmux` and `just lsp-setup`, this repo's rust-analyzer runs through `codetags-lsp` and lspmux, shared by Claude Code and VS Code. `features/lsp/wiring.feature` (P3.14) runs that setup on all three OSes, and it runs on the dev host (V140). Stage 3 (the watcher client) isn't needed for rust-analyzer (V126). What remains is P3.12, P3.13 and the D26 root rewrite (P3.5).
   - **P1 order:** the Rust provider is built first, to reach M1 soonest.
 - Phase numbers are labels, not order:
   - P6 needs P2 but not P5, except P6.4.
@@ -512,7 +515,7 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 
 | ID | Tag | Task |
 |---|---|---|
-| P0.1 | MECH | `git init`. Create the public GitHub repo; the human confirms before the first push. Root `LICENSE` is BSD-3-Clause; `license = "BSD-3-Clause"` in every crate's manifest except `lspx` (D9). |
+| P0.1 | MECH | `git init`. Create the public GitHub repo; the human confirms before the first push. Root `LICENSE` is BSD-3-Clause; `license = "BSD-3-Clause"` in every crate's manifest (D9). |
 | P0.1b | MECH | `deny.toml` and `just license-check` (rule 12), wired into `just check`. |
 | P0.2 | MECH | Workspace skeleton: the §3 crates as stubs, and `rust-toolchain.toml`. |
 | P0.3 | MECH | justfile (Appendix A). |
@@ -597,15 +600,16 @@ The design comes from `docs/proxy-zero-change.md`, the classification of every r
 | P3.2 | SPEC | ◐ | Proxy features: `features/lsp/shim.feature` (hermetic: fake server plus real lspmux), `record.feature`, `claude-client.feature`, and replays. **Remaining:** features for routing-key injection, crash recovery and configuration. |
 | P3.3 | CORE | ✅ | Test harness: a fake language server, scripted editor and agent sessions, and replay of recorded Claude Code sessions (`tests/fixtures/lsp/`). |
 | P3.4 | CORE | ◐ | Shim core, `codetags-lsp serve`. **Done:** non-LSP pass-through (`--version`, `scip`); roles; on-demand daemon (D21; no inherited handles on Windows, V125); relay through `lspmux client`; a session sending `shutdown` without `exit` only detaches (V121); the recorder flag. **Remaining:** routing-key injection (`CODETAGS_KEY_*`: toolchain, semantic configuration, host and filesystem, R9 and R11), and wrapper resolution for gopls, pyright and the TS server. |
-| P3.5 | CORE | ◐ | Rewriting `initialize`. **Done:** multi-root gets an LSP error; the root is normalized, in the client's spelling; the watched-files capability is removed, so rust-analyzer watches files itself (V122, V126). **Remaining:** the full fixed capability set (R15). Today the first session's capabilities apply to everyone, because lspmux caches `initialize`. |
-| P3.6 | CORE | ◐ | Session policy (D16). **Done:** the agent role drops document sync, and an agent answers `workspace/configuration` with `null`. **Remaining:** merging configuration across sessions (brief §4.2's `RouteKey`/`Union`/`Strongest`/`Authority`); per-server exceptions (tsserver needs open files); answering cancellations locally (C-4). |
+| P3.5 | CORE | ◐ | Rewriting `initialize`. **Done:** multi-root gets an LSP error; the root is normalized, in the client's spelling; the watched-files capability is removed, so rust-analyzer watches files itself (V122, V126). **Remaining:** the canonical root, with every URI rewritten between the client's spelling and the canonical one in both directions (D26, V132); the full fixed capability set (R15). Today the first session's capabilities apply to everyone, because lspmux caches `initialize`. |
+| P3.6 | CORE | ◐ | Session policy (D16). **Done:** the agent role drops document sync, and an agent answers `workspace/configuration` with `null`. **Remaining:** merging configuration across sessions (brief §4.2's `RouteKey`/`Union`/`Strongest`/`Authority`, all three policies in v1, D24, so this includes a cross-session coordinator); per-server exceptions (tsserver needs open files); answering cancellations locally (C-4). |
 | P3.7 | CORE | ☐ | Crash recovery (R39): detect the server's exit, fail in-flight requests, start a fresh client, replay. |
 | P3.8 | CORE | ☐ | The watcher as an lspmux client (stage 3). **Not needed for rust-analyzer** (V126). Needed for gopls and other servers that rely on the client to watch files. |
 | P3.9 | CORE | ✅ | `codetags lsp setup` writes the lspmux config (D20); `codetags doctor` checks the lspmux rev, config drift, and a loopback address or a socket in a 0700 directory (D17). `just lsp-setup` wires the Claude Code plugin `codetags-lsp@codetags-local` (D18) and this repo's `.vscode/settings.json` (D22). |
 | P3.10 | CORE | ◐ | Integration with real servers. **Done:** rust-analyzer through the shim, live with Claude Code (V120, V126). **Remaining:** gopls; real VS Code automation (scripted VS Code-style sessions only so far); checking that Windows starts the `.exe` wrappers (V119). |
 | P3.11 | SPEC | ☐ | Notes for the upstream PR on server requests lspmux never answers (`applyEdit`, `showMessageRequest`; they affect gopls, not rust-analyzer). A human writes the PR (lspmux question c). |
-| P3.12 | CORE | ☐ | Readiness gate in the shim, moved from P4.3: agent requests wait for the server to be quiescent (rust-analyzer's `experimental/serverStatus`), with a bound. The live flake in V128, an early request racing indexing, is the evidence that it's needed. |
-| P3.13 | MECH | ☐ | Live-test follow-ups:<br>• confirm the unopened-file rule with one live run;<br>• add a warm-up to "Definitions and references still answer through the shim" (V128);<br>• enable `claude-client` in CI once the human adds an `ANTHROPIC_API_KEY` secret, removing its expected-skip entries. |
+| P3.12 | CORE | ☐ | Readiness gate in the shim, moved from P4.3: agent requests wait for the server to be quiescent (rust-analyzer's `experimental/serverStatus`), with a bound. The live flake in V128, an early request racing indexing, is the evidence that it's needed. On this repo the window was over a minute, and the agent read the empty answer as "0 results" (V141), so the bound must allow for a real workspace's load. |
+| P3.13 | MECH | ◐ | Live-test follow-ups:<br>• ✅ confirm the unopened-file rule with one live run (V143);<br>• add a warm-up to "Definitions and references still answer through the shim" (V128);<br>• enable `claude-client` in CI once the human adds an `ANTHROPIC_API_KEY` secret, removing its expected-skip entries. |
+| P3.14 | SPEC | ✅ | Drive the M3 setup claim instead of trusting it (D25; `features/lsp/wiring.feature`, V131). The scenarios cover: `lsp-setup`'s own script in a scratch checkout; the committed wrappers started the way Claude Code and VS Code start them; one real rust-analyzer for both; V126's on-disk changes on all three OSes; and a visible fallback when setup is missing or stale. It proposes a wrapper check that the shim can serve, and an `lsp wiring:` line in `codetags doctor`. |
 
 **Done when** VS Code-style and Claude Code-style sessions share one rust-analyzer **and one gopls**, on all three OSes, with no panic on multi-root (the brief's P3 condition). rust-analyzer meets this now; gopls needs P3.4's wrapper resolution, P3.8 and P3.11.
 
@@ -709,7 +713,7 @@ The design comes from `docs/proxy-zero-change.md`, the classification of every r
 | O-6 | Untagging by unlinking an entry in a query directory. | **superseded by D11:** `rm` untags, guarded by §2.11 |
 | O-7 | Should file items in `q/` show the `.skel` view or the raw source? | **superseded by D11:** raw source under `@files/`, skeletons under `@skel/` |
 | O-8 | Targets: tag write → visible; source edit → view fresh; a cap on result listings. | 250 ms p95 on 1M items (proposed); measure freshness first; no cap |
-| O-9 | Import lspmux by subtree, or keep a separate fork repo. | subtree |
+| O-9 | Import lspmux by subtree, or keep a separate fork repo. | **obsolete (D14, D19):** lspmux is installed at a pinned revision, not imported |
 | O-10 | macFUSE or FUSE-T as optional macOS backends when already installed. | not in v1 |
 | O-11 | Cross-machine proxy with a Windows endpoint. | resolved by D14: SSH TCP port forwarding |
 | O-12 | User tags on symbols, not just files. | files only in v1; the id scheme already allows symbols |
