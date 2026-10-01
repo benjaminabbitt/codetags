@@ -3,3 +3,4 @@
 pub mod ingest;
 pub mod project;
 pub mod provider;
+pub mod report;

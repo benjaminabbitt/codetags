@@ -371,7 +371,7 @@ fn rows(db: &codetags_model::Connection, sql: &str, params: &[&dyn ToSql]) -> Ve
 }
 
 /// A table's rows as maps from header to cell.
-fn table_rows(step: &Step) -> Vec<HashMap<String, String>> {
+pub(crate) fn table_rows(step: &Step) -> Vec<HashMap<String, String>> {
     let table = step.table.as_ref().expect("the step has a table");
     let header = &table.rows[0];
     table.rows[1..]

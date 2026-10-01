@@ -498,6 +498,7 @@ dependencies = [
  "codetags-watch",
  "cucumber",
  "regex",
+ "serde_json",
  "tagma-core",
  "tempfile",
 ]

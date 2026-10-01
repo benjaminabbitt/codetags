@@ -394,6 +394,24 @@ Then the file {string} in the scenario's directory holds the lines {string}
       # whitespace-separated; blank lines and `#` comments are ignored
 ```
 
+### Resolution report and edge-count regression (P1.8)
+
+`codetags report` run in the scenario's directory reads the index the ingest
+steps write. A generation's edge counts are its `run_file` rows.
+
+```gherkin
+Given the edge count of {string} in generation {int} is changed to {int}
+      # rewrites that file's `run_file` rows in that complete generation, as a
+      # provider that silently lost (or gained) edges would have written them
+Given the file {string} in the scenario's directory holds:   # docstring, written as is
+Then the JSON resolution report counts:
+      # parses the last process's stdout (`report --json`); table: scope | language |
+      # package | module | call sites | resolved | unresolved, where scope is module,
+      # language or total; an empty cell is null; compared with every count in the report as a set
+Then the file {string} in the scenario's directory holds the JSON:
+      # docstring; compared as parsed JSON values
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

@@ -19,6 +19,7 @@ mod steps_mount;
 mod steps_names;
 mod steps_privhelper;
 mod steps_query;
+mod steps_report;
 mod steps_store;
 mod steps_watch;
 mod tags;
