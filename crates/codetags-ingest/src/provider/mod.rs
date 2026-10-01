@@ -10,6 +10,7 @@
 pub mod go;
 pub mod rust;
 pub mod scip;
+pub mod ts;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

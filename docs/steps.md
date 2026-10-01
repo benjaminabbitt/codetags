@@ -205,6 +205,41 @@ Then every call site in the call graph, except a function literal's, starts an o
       # a site whose source text starts with `func` is a function literal's
 ```
 
+TypeScript (P1.6): scip-typescript and Jelly. *That project* is the
+scenario's scratch project from the last `Given`. The run steps above (`the
+provider run succeeds`, `... fails with stderr matching`) check whichever tool
+ran last. scip-typescript and Jelly log their errors to stdout, so for them
+the error's stderr section holds both streams. A *location* `{string}` is
+`<path>:<line>`, the path relative to the root with `/` separators; a
+function's location is the line it starts on. Location lists are
+whitespace-separated and compared as sorted sets; `""` is the empty set.
+
+```gherkin
+Given a TypeScript project whose {string} is {string}
+      # the fixture "ts"'s tsconfig.json and package.json, plus that file with that one-line content
+Given a TypeScript project whose {string} declares a function in {int} MB
+      # as above; the file declares one function and is padded with comment lines to that size
+Given a directory without a tsconfig.json whose {string} is {string}
+When the TypeScript provider indexes the fixture {string}    # `scip-typescript` on PATH
+When the TypeScript provider indexes that project
+When the TypeScript provider indexes that project with a file-size limit of {string}
+      # scip-typescript's --max-file-byte-size, e.g. "1mb", instead of the runner's raised default
+When Jelly analyzes the fixture {string}                     # `jelly` on PATH
+When Jelly analyzes that project
+When Jelly analyzes a directory that does not exist
+Then the definition of {string} has no enclosing range
+Then the definitions of {string} enclose lines {string}
+      # every definition occurrence, in index order, as whitespace-separated `<first>-<last>` line ranges
+Then {string} implements {string}                            # an is_implementation relationship
+Then no global symbol occurs in {string} on line {int}       # only `local N` occurrences, if any
+Then the call graph files are exactly {string}               # whitespace-separated relative paths, sorted sets
+Then the calls on line {int} of {string} reach exactly {string}
+      # the functions (not modules) called from every call site starting on that line
+Then the call graph has an edge from {string} to {string} at {string}
+      # caller, callee and call-site locations
+Then line {int} of {string} loads the module {string}        # an import or require edge to that file's module
+```
+
 ## Watcher and coalescer
 
 A *changes* `{string}` is a whitespace-separated list of `<kind>:<path>`

@@ -35,7 +35,7 @@ fn run_go(root: &Path, scratch: &Path, patterns: &[&str]) -> GoOutcome {
 }
 
 fn record(world: &mut CodetagsWorld, root: PathBuf, (run, call_graph): GoOutcome) {
-    world.index.run = Some(run);
+    world.index.set_run(run);
     world.index.call_graph = call_graph;
     world.index.root = Some(root);
 }

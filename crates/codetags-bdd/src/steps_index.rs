@@ -14,6 +14,7 @@ use codetags_ingest::ingest;
 use codetags_ingest::provider::go::CallEdge;
 use codetags_ingest::provider::rust::RustAnalyzer;
 use codetags_ingest::provider::scip::{Document, Occurrence, ScipIndex, SymbolKind};
+use codetags_ingest::provider::ts::jelly::CallGraph;
 use codetags_model::{GenerationStore, ToSql};
 use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
@@ -24,10 +25,13 @@ use crate::CodetagsWorld;
 /// The outcome of a provider run: the decoded index, or the error's message.
 pub(crate) type RunOutcome = Arc<Result<ScipIndex, String>>;
 
+/// The outcome of a Jelly run: the call graph, or the error's message.
+pub(crate) type GraphOutcome = Arc<Result<CallGraph, String>>;
+
 /// State the index steps share within one scenario.
 #[derive(Debug, Default)]
 pub struct IndexState {
-    /// The last provider run.
+    /// The last SCIP provider run.
     pub(crate) run: Option<RunOutcome>,
     /// The call graph of the last provider run, for providers that write one
     /// (Go, `steps_index_go`).
@@ -36,13 +40,70 @@ pub struct IndexState {
     pub(crate) root: Option<PathBuf>,
     /// The report of the last ingest into a generation (P1.3).
     pub(crate) ingest: Option<codetags_ingest::ingest::IngestReport>,
+    /// The last Jelly run (TypeScript, `steps_index_ts`).
+    pub(crate) graph: Option<GraphOutcome>,
+    /// Whether the call-graph run is the latest run, the one the run steps
+    /// check.
+    pub(crate) graph_last: bool,
+    /// The project a `Given` step built in the scratch directory.
+    pub(crate) project: Option<PathBuf>,
+}
+
+impl IndexState {
+    /// Records a SCIP provider run as the latest run.
+    pub(crate) fn set_run(&mut self, run: RunOutcome) {
+        self.run = Some(run);
+        self.graph_last = false;
+    }
+
+    /// Records a call-graph run as the latest run.
+    pub(crate) fn set_graph(&mut self, graph: GraphOutcome) {
+        self.graph = Some(graph);
+        self.graph_last = true;
+    }
+
+    /// The latest run's error message, or `None` if it succeeded.
+    fn last_error(&self) -> Option<&str> {
+        let error = if self.graph_last {
+            let graph = self.graph.as_ref().expect("an earlier step ran Jelly");
+            graph.as_ref().as_ref().err()
+        } else {
+            let run = self.run.as_ref().expect("an earlier step ran a provider");
+            run.as_ref().as_ref().err()
+        };
+        error.map(String::as_str)
+    }
 }
 
 /// Fixture runs, shared by the scenarios of one process: the index of a
-/// fixture is deterministic, and each run takes several seconds.
+/// fixture is deterministic, and each run takes several seconds. Keyed by
+/// tool and fixture.
 fn fixture_runs() -> &'static Mutex<HashMap<String, RunOutcome>> {
     static RUNS: OnceLock<Mutex<HashMap<String, RunOutcome>>> = OnceLock::new();
     RUNS.get_or_init(Default::default)
+}
+
+/// The cached run of `tool` over the fixture `name`, made by `run` on a
+/// cache miss.
+pub(crate) fn cached_fixture_run(
+    tool: &str,
+    name: &str,
+    run: impl FnOnce() -> RunOutcome,
+) -> RunOutcome {
+    let key = format!("{tool}:{name}");
+    let cached = fixture_runs()
+        .lock()
+        .expect("fixture cache lock")
+        .get(&key)
+        .cloned();
+    cached.unwrap_or_else(|| {
+        let outcome = run();
+        fixture_runs()
+            .lock()
+            .expect("fixture cache lock")
+            .insert(key, outcome.clone());
+        outcome
+    })
 }
 
 /// `tests/fixtures/<name>`, without `..` components (the provider gets an
@@ -109,28 +170,14 @@ pub(crate) fn definition<'a>(index: &'a ScipIndex, name: &str) -> &'a Occurrence
 /// The Rust provider's run over fixture `name`, shared by every scenario of
 /// this process.
 fn fixture_run(world: &mut CodetagsWorld, name: &str) -> RunOutcome {
-    let cached = fixture_runs()
-        .lock()
-        .expect("fixture cache lock")
-        .get(name)
-        .cloned();
-    match cached {
-        Some(run) => run,
-        None => {
-            let run = run_rust(&fixture(name), world.scratch());
-            fixture_runs()
-                .lock()
-                .expect("fixture cache lock")
-                .insert(name.to_string(), run.clone());
-            run
-        }
-    }
+    let scratch = world.scratch().to_path_buf();
+    cached_fixture_run("rust", name, || run_rust(&fixture(name), &scratch))
 }
 
 #[when(expr = "the Rust provider indexes the fixture {string}")]
 fn rust_indexes_fixture(world: &mut CodetagsWorld, name: String) {
     let run = fixture_run(world, &name);
-    world.index.run = Some(run);
+    world.index.set_run(run);
 }
 
 #[when(expr = "the Rust provider indexes a directory whose Cargo.toml is {string}")]
@@ -139,31 +186,30 @@ fn rust_indexes_manifest(world: &mut CodetagsWorld, manifest: String) {
     let root = scratch.join("project");
     std::fs::create_dir_all(&root).expect("create project dir");
     std::fs::write(root.join("Cargo.toml"), manifest).expect("write Cargo.toml");
-    world.index.run = Some(run_rust(&root, &scratch));
+    world.index.set_run(run_rust(&root, &scratch));
 }
 
 #[when(expr = "the Rust provider indexes a directory that does not exist")]
 fn rust_indexes_nothing(world: &mut CodetagsWorld) {
     let scratch = world.scratch().to_path_buf();
-    world.index.run = Some(run_rust(&scratch.join("no-such-project"), &scratch));
+    world
+        .index
+        .set_run(run_rust(&scratch.join("no-such-project"), &scratch));
 }
 
 #[then(expr = "the provider run succeeds")]
 fn run_succeeds(world: &mut CodetagsWorld) {
-    index(world);
+    if let Some(error) = world.index.last_error() {
+        panic!("the provider run failed: {error}");
+    }
 }
 
 #[then(expr = "the provider run fails with stderr matching {string}")]
 fn run_fails(world: &mut CodetagsWorld, pattern: String) {
-    let run = world
+    let error = world
         .index
-        .run
-        .as_ref()
-        .expect("an earlier step ran a provider");
-    let error = match run.as_ref() {
-        Ok(_) => panic!("the provider run succeeded"),
-        Err(error) => error,
-    };
+        .last_error()
+        .expect("the provider run succeeded");
     let (_, stderr) = error
         .split_once("--- provider stderr ---")
         .unwrap_or_else(|| panic!("the error does not carry the provider's stderr: {error}"));

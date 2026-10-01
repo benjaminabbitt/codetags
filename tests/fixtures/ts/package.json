@@ -1,0 +1,6 @@
+{
+  "name": "codetags-fixture-ts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript provider fixture (PLAN.md §9 P1.6). No dependencies, so indexing needs no network."
+}

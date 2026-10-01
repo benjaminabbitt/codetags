@@ -34,3 +34,21 @@ version = "v0.2.7"
 install = "go-install-local"
 path = "tools/gocallgraph"
 x-tools = "v0.50.0"
+
+[node]
+# Node.js for the npm providers below; CI's actions/setup-node installs this
+# exact version (the `providers` job reads it from here). Jelly 0.13.0 needs
+# Node 22 or later (V83). Locally, any Node 22 whose global npm prefix is
+# per-user (nvm, or `npm config set prefix ~/.local`) will do.
+version = "22.22.2"
+
+[scip-typescript]
+# Apache-2.0; bundles TypeScript 5.9.3 (V81). `npm install -g` of this spec.
+# The runner raises --max-file-byte-size from the 1 MB default and fails on
+# any file still skipped (brief §4.4).
+npm = "@sourcegraph/scip-typescript@0.4.0"
+
+[jelly]
+# github.com/cs-au-dk/jelly, BSD-3-Clause (V83). `npm install -g` of this
+# spec. Its JSON call graph (-j) is unioned with scip-typescript's index.
+npm = "@cs-au-dk/jelly@0.13.0"
