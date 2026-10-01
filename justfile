@@ -122,10 +122,13 @@ eval CONDITION:
 
 # Environment report: mount backend, helper, providers. Builds with
 # --workspace (not `cargo run -p`, which unifies features differently), then
-# runs the binary; it links no DuckDB, so it runs outside cargo.
+# runs the binary outside cargo. It links the prebuilt libduckdb, which
+# libduckdb-sys copies into target/debug/deps: on Linux and macOS the binary's
+# run path finds it there (crates/codetags/build.rs, V72); Windows has no run
+# path, so deps goes first on PATH (as an absolute POSIX path for Git's sh).
 doctor:
     cargo build --workspace --bins --quiet
-    "${CARGO_TARGET_DIR:-target}/debug/codetags" doctor
+    bin="${CARGO_TARGET_DIR:-target}/debug"; if command -v cygpath >/dev/null 2>&1; then bin="$(cygpath -ua "$bin")"; else case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac; fi; PATH="$bin/deps:$PATH" "$bin/codetags" doctor
 
 # --- development ---------------------------------------------------------
 
