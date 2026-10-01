@@ -1,6 +1,6 @@
 # Status
 
-Snapshot after the first overnight run, 2026-10-01. `PLAN.md` is the plan and
+Snapshot, updated 2026-10-01 (after the first overnight run, and M3 stages 0–2). `PLAN.md` is the plan and
 `docs/verification.md` holds the evidence; this file says where things stand
 and what is waiting on whom.
 
@@ -16,6 +16,7 @@ cross-job BDD coverage, unless a row says otherwise.
 | P1 | **P1.1** the generation store. **P1.2** names (D15): canonical names, the Windows private-use mapping, item ids, collision suffixes. **P1.3** SCIP ingest into DuckDB generations, plus `codetags index`. **P1.3c** naming defaults; this repo indexes with 0 collisions. **P1.4–P1.7** provider runners and fixtures for Rust, Go (with gocallgraph), TypeScript (with Jelly) and Python, green on all three OSes. **P1.8** `codetags report` (resolution rates by language and module), edge-count regression against the previous generation, and `just baseline-check` against `tests/baselines/`; Rust has a baseline, and the other languages get one once ingest supports them. |
 | P4 | **P4.1–P4.2** the watcher and coalescer (notify), the same on all three OSes. **P4.4** the optional fanotify helper (Linux), with its privileged paths proven in CI. |
 | Dogfood | `just dogfood` indexes this repo (Rust), and CI fails on a provider failure or any collision. |
+| M3 (P3) | **Stage 0:** Claude Code's LSP client is described in Gherkin (`features/lsp/claude-client.feature`): observed live and headless, with replays on every push. **Stages 1–2:** lspmux pinned at `18861f9` and configured by `codetags lsp setup`; the `codetags-lsp` shim (agent sessions never own documents; multi-root rejected; daemon started on demand); a project-scoped Claude Code plugin and VS Code wiring. **Freshness:** rust-analyzer's own watcher keeps it current through the shim, so Rust needs no stage 3 (V126). |
 | Specs and analyses | For review, under `docs/spec-drafts/`: views (P2.1), plugins (P7.1), CLI tagging (P6.1), and a P3 re-plan. `docs/proxy-zero-change.md` analyses using lspmux with no changes. |
 
 ## Waiting on you
@@ -46,6 +47,7 @@ Each item has the default currently built or proposed.
 | 12 | Should `codetags index` print the resolution report after every run (brief: "after every run")? | — |
 | 13 | Review the privileged helper's security model before anyone installs it (`codetags-privhelper` crate docs). Should writer PIDs reach watcher batches, for D12? | — |
 | 14 | The eval repo for conditions A, B and C (brief §4.6, still [OPEN]) | — |
+| 16 | Add an `ANTHROPIC_API_KEY` repo secret, so the live Claude Code LSP test (`claude-client` job) runs in CI | not set; the job skips itself |
 | 15 | scip-python 0.6.6 can't start on Windows (open upstream bug sourcegraph/scip-python#210). `just setup-providers` patches the installed package (`tools/patch-scip-python.js`), with guards, until the fix (#224) is released. The alternative is a Windows exception for Python (R2). | the patch |
 
 ## Remaining work
@@ -54,12 +56,12 @@ Each item has the default currently built or proposed.
 |---|---|---|
 | P1 | Ingest for Go, TS and Python (call-graph join, the Jelly union, name-match candidates); multi-language `codetags index`; P1.3b; trait expansion | Decisions 6 and 11 for parts; the rest is ready |
 | P2 | `ViewFs`, renderers as built-in plugins, the tagma bridge, the materializer, `codetags q`/`show`, the eval harness | The P2.1 review; the eval repo |
-| P3 | The `codetags-lsp` shim, lspmux setup, initialize rewriting, crash handling, the watcher as an lspmux client, M3 | The P3 re-plan review; decision 3 |
+| P3 | P3.12 the readiness gate; P3.13 live-test follow-ups; P3.4 routing-key injection and wrappers for gopls, pyright and the TS server; P3.5 the full fixed capability set; P3.6 configuration merge; P3.7 crash recovery; P3.8 the watcher client (gopls); P3.10 gopls, real VS Code automation and the Windows `.exe` wrappers; P3.11 the upstream PR notes | (c) for P3.11; the rest is ready |
 | P4 | P4.3 routing and readiness gate (needs P3); P4.4 Windows USN; P4.5 reindex loop; P4.6–P4.7 notifier | P3; the D13 review |
 | P5 | Live mounts over `ViewFs` (FUSE, NFS, WinFsp), with the S2 rule of bumping directory mtimes | P2.2 |
 | P6 | The tags file, the CLI, the overlay, the operation queue and guard, filesystem tagging | The P6.1 and D11/D12 reviews |
 | P7 | The plugin registry, the declarative runtime and sandbox, Mermaid | The P7.1 review |
-| Milestones | **M1** static dogfood (needs P2); **M2** live (P5.1); **M3** proxy (P3, P4) | as above |
+| Milestones | **M1** static dogfood (needs P2); **M2** live (P5.1); **M3** usable with rust-analyzer after `just setup-lspmux` and `just lsp-setup`, polish in P3.12 and P3.13 | as above |
 
 ## Housekeeping
 

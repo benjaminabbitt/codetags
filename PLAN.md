@@ -118,6 +118,21 @@ Details are in `docs/verification.md`. These change the work:
 - **V3.** lspmux shares one server across differently spelled paths, because it compares device and inode.
 - **V5.** Some server-to-client requests are already handled; the rest get no response at all, so the server hangs.
 
+
+### 1.4 Progress (2026-10-01)
+
+Each phase below starts with a status line: ✅ done, ◐ partly done, ☐ not started. `docs/status.md` has the detail, and the list of decisions waiting on the human.
+
+| Phase | Status |
+|---|---|
+| P0 | ✅ |
+| P0b | ✅ all four spikes |
+| P1 | ◐ P1.1–P1.8 done, P1.3b split out; ingest for Go, TS and Python remains |
+| P2 | ☐ the spec drafts (`docs/spec-drafts/views`, `plugins`) await review |
+| P3 | ◐ stages 0–2 of M3 done for rust-analyzer (§11) |
+| P4 | ◐ P4.1, P4.2 and P4.4 (Linux) done |
+| P5–P7 | ☐ |
+| Dogfood | indexing runs in CI (M1 needs P2); M3 is usable with rust-analyzer |
 ---
 
 ## 2. Architecture
@@ -483,7 +498,7 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 - **Dogfood milestones** (D10):
   - **M1, static.** Once P1.4 (the Rust provider) and P2.5–P2.6 (materializer and CLI) are done, `just dogfood` indexes this repo and materializes its views. CI runs it, and development uses the views. This repo's own `.codetags/` is committed then.
   - **M2, live.** After P5.1, this repo's views are mounted while developing on Linux.
-  - **M3, proxy.** After P3–P4, this repo's rust-analyzer runs through `lspx`.
+  - **M3, proxy.** ◐ Stages 0–2 are done (2026-10-01). Once a human runs `just setup-lspmux` and `just lsp-setup`, this repo's rust-analyzer runs through `codetags-lsp` and lspmux, shared by Claude Code and VS Code. Stage 3 (the watcher client) isn't needed for rust-analyzer (V126). What remains is P3.12 and P3.13.
   - **P1 order:** the Rust provider is built first, to reach M1 soonest.
 - Phase numbers are labels, not order:
   - P6 needs P2 but not P5, except P6.4.
@@ -492,6 +507,8 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 ---
 
 ## 7. P0 — bootstrap
+
+**Status (2026-10-01):** ✅ All of P0, plus R1 (prebuilt DuckDB) and R8 (its checksum). CI covers Linux, macOS and Windows with cross-job BDD coverage, and Windows jobs run de-elevated (V18).
 
 | ID | Tag | Task |
 |---|---|---|
@@ -507,6 +524,8 @@ P0 ──┬─> P0b spikes (S1–S4) ──────────────
 **Done when** `just check` exits 0 on all three runners.
 
 ## 8. P0b — platform spikes
+
+**Status (2026-10-01):** ✅ S1 Linux FUSE, S2 macOS NFS loopback (`nfs3_server`), S3 Windows WinFsp (winfsp-rs), and S4 the Win32 name probe, which also verified the Git Bash private-use mapping (D15).
 
 Because of D2, mount risk is retired early. Each spike:
 
@@ -525,6 +544,11 @@ Because of D2, mount risk is retired early. Each spike:
 
 ## 9. P1 — index into DuckDB generations (brief §4.4, §2.2 here)
 
+**Status (2026-10-01):** ◐
+- **Done:** P1.1 store; P1.2 names (D15); P1.3 ingest and `codetags index`, plus P1.3c's naming defaults (dogfood at 0 collisions); P1.4–P1.7 provider runners and fixtures on all three OSes; P1.8 the report and baselines.
+- **Remaining:** ingest for Go, TS and Python (call-graph join, Jelly union, name-match candidates), multi-language `codetags index`, and P1.3b (control context and literal names; needs a parser beyond SCIP).
+- **Waiting on a decision:** expanding Rust trait calls (V64).
+
 | ID | Tag | Task |
 |---|---|---|
 | P1.1 | CORE | `codetags-model`: the brief's schema plus `run` and `file` tables, and the generation store (write, complete, open-latest, GC). Scenario: a reader holds generation N while a writer completes N+1. |
@@ -540,6 +564,8 @@ Because of D2, mount risk is retired early. Each spike:
 - **Done when** the brief's P1 condition holds on all three OSes. If a provider cannot run on an OS, that exception is recorded in `docs/verification.md` and needs human approval.
 
 ## 10. P2 — view core, static tree, CLI, evaluation
+
+**Status (2026-10-01):** ☐ The P2.1 and P7.1 drafts are in `docs/spec-drafts/` awaiting review, which gates P2.2 onward. The eval repo is still [OPEN].
 
 | ID | Tag | Task |
 |---|---|---|
@@ -558,31 +584,43 @@ Because of D2, mount risk is retired early. Each spike:
 
 This no longer gates anything (D2).
 
-## 11. P3 — lspx proxy (brief §4.2, plus C1 and V1–V5)
+## 11. P3 — proxy through unmodified lspmux (D14, D16–D22; brief §4.1–§4.2)
 
-| ID | Tag | Task |
-|---|---|---|
-| P3.0 | SPEC | **Re-planned by D14.** Analyse a zero-change integration of upstream lspmux, classifying each brief §4.1–§4.3 requirement as done upstream, achievable outside lspmux, or needing an upstream PR, in `docs/proxy-zero-change.md`. P3.1–P3.8 are rewritten from it after human review. |
-| P3.1 | MECH | Transport: no change (D14). Verify that upstream's default listen address is loopback, and record it. |
-| P3.2 | CORE | Routing key per the brief. Replace `pass_environment = ["*"]` with a curated allowlist (V2). Replace device+inode equality with spelled-path identity, warning on aliases (V3). |
-| P3.3 | CORE | Fixed-capability handshake. A multi-root handshake returns an LSP error and never panics (V4). |
-| P3.4 | CORE | Server-to-client requests per the brief's table. Every request gets a response (V5). |
-| P3.5 | CORE | Document ownership. |
-| P3.6 | CORE | Configuration merge. |
-| P3.7 | CORE | Crash recovery. |
-| P3.8 | CORE | Scripted-session features, VS Code-style and Claude Code-style, sharing one rust-analyzer and one gopls. |
+**Status (2026-10-01):** ◐ The rust-analyzer half is done (M3 stages 0–2, §6). Claude Code and VS Code share one rust-analyzer through `codetags-lsp` and lspmux pinned at `18861f9`. This is proven by hermetic scenarios on all three OSes and live with Claude Code on Linux.
 
-**Done when** the brief's P3 condition holds on all three OSes.
+The design comes from `docs/proxy-zero-change.md`, the classification of every requirement. The rows follow the draft `docs/spec-drafts/p3-plan.md`, adjusted by D16–D22. The chain is: editor → wrapper → `codetags-lsp serve --role editor|agent` → `lspmux client` → `lspmux server` → language server.
 
-For rust-analyzer, freshness after external changes needs no watcher client (V126, note under P4).
+| ID | Tag | Status | Task |
+|---|---|---|---|
+| P3.0 | SPEC | ✅ | Zero-change analysis, in `docs/proxy-zero-change.md` (D14). |
+| P3.1 | MECH | ✅ | Pin and install lspmux at `18861f9` (D19): `just setup-lspmux` installs into `.codetags/local`, and CI installs it for `@lspmux` scenarios. |
+| P3.2 | SPEC | ◐ | Proxy features: `features/lsp/shim.feature` (hermetic: fake server plus real lspmux), `record.feature`, `claude-client.feature`, and replays. **Remaining:** features for routing-key injection, crash recovery and configuration. |
+| P3.3 | CORE | ✅ | Test harness: a fake language server, scripted editor and agent sessions, and replay of recorded Claude Code sessions (`tests/fixtures/lsp/`). |
+| P3.4 | CORE | ◐ | Shim core, `codetags-lsp serve`. **Done:** non-LSP pass-through (`--version`, `scip`); roles; on-demand daemon (D21; no inherited handles on Windows, V125); relay through `lspmux client`; a session sending `shutdown` without `exit` only detaches (V121); the recorder flag. **Remaining:** routing-key injection (`CODETAGS_KEY_*`: toolchain, semantic configuration, host and filesystem, R9 and R11), and wrapper resolution for gopls, pyright and the TS server. |
+| P3.5 | CORE | ◐ | Rewriting `initialize`. **Done:** multi-root gets an LSP error; the root is normalized, in the client's spelling; the watched-files capability is removed, so rust-analyzer watches files itself (V122, V126). **Remaining:** the full fixed capability set (R15). Today the first session's capabilities apply to everyone, because lspmux caches `initialize`. |
+| P3.6 | CORE | ◐ | Session policy (D16). **Done:** the agent role drops document sync, and an agent answers `workspace/configuration` with `null`. **Remaining:** merging configuration across sessions (brief §4.2's `RouteKey`/`Union`/`Strongest`/`Authority`); per-server exceptions (tsserver needs open files); answering cancellations locally (C-4). |
+| P3.7 | CORE | ☐ | Crash recovery (R39): detect the server's exit, fail in-flight requests, start a fresh client, replay. |
+| P3.8 | CORE | ☐ | The watcher as an lspmux client (stage 3). **Not needed for rust-analyzer** (V126). Needed for gopls and other servers that rely on the client to watch files. |
+| P3.9 | CORE | ✅ | `codetags lsp setup` writes the lspmux config (D20); `codetags doctor` checks the lspmux rev, config drift, and a loopback address or a socket in a 0700 directory (D17). `just lsp-setup` wires the Claude Code plugin `codetags-lsp@codetags-local` (D18) and this repo's `.vscode/settings.json` (D22). |
+| P3.10 | CORE | ◐ | Integration with real servers. **Done:** rust-analyzer through the shim, live with Claude Code (V120, V126). **Remaining:** gopls; real VS Code automation (scripted VS Code-style sessions only so far); checking that Windows starts the `.exe` wrappers (V119). |
+| P3.11 | SPEC | ☐ | Notes for the upstream PR on server requests lspmux never answers (`applyEdit`, `showMessageRequest`; they affect gopls, not rust-analyzer). A human writes the PR (lspmux question c). |
+| P3.12 | CORE | ☐ | Readiness gate in the shim, moved from P4.3: agent requests wait for the server to be quiescent (rust-analyzer's `experimental/serverStatus`), with a bound. The live flake in V128, an early request racing indexing, is the evidence that it's needed. |
+| P3.13 | MECH | ☐ | Live-test follow-ups:<br>• confirm the unopened-file rule with one live run;<br>• add a warm-up to "Definitions and references still answer through the shim" (V128);<br>• enable `claude-client` in CI once the human adds an `ANTHROPIC_API_KEY` secret, removing its expected-skip entries. |
+
+**Done when** VS Code-style and Claude Code-style sessions share one rust-analyzer **and one gopls**, on all three OSes, with no panic on multi-root (the brief's P3 condition). rust-analyzer meets this now; gopls needs P3.4's wrapper resolution, P3.8 and P3.11.
 
 ## 12. P4 — watcher, coalescer, readiness gate, reindex loop
+
+**Status (2026-10-01):** ◐
+- **Done:** P4.1–P4.2 (the notify watcher and coalescer), and P4.4 on Linux (the fanotify helper, its privileged paths proven in CI).
+- **Remaining:** P4.3 routing (needs P3.8); P4.4 on Windows (USN journal); P4.5 the reindex loop; P4.6–P4.7 the notifier (D13 under review).
+- **Waiting on a decision:** Windows overflow (V56).
 
 | ID | Tag | Task |
 |---|---|---|
 | P4.1 | CORE | `codetags-watch` on notify: scan new directories to close the creation race; on Rescan, diff against the last snapshot; apply the brief's excludes plus `.codetags/index/`; give clear limit errors (the inotify sysctl, the Windows buffer). |
 | P4.2 | CORE | Coalescer: the brief's merge rule, a quiet window with a maximum-wait cap, and a pause while `.git/index.lock` exists. |
-| P4.3 | CORE | Route each batch to servers by registered globs ∧ the server's notifier filter (§2.12); readiness gate. |
+| P4.3 | CORE | Route each batch to servers by registered globs ∧ the server's notifier filter (§2.12); the readiness gate moved to the shim (P3.12). |
 | P4.4 | CORE | Optional privhelper: fanotify on Linux, USN journal on Windows. It filters paths per user; the daemon logs which mode is active and falls back when the helper is absent. |
 | P4.6 | SPEC | `features/watch/notify.feature`: the `fs:` facts, filter semantics, narrowing-only, and the per-server defaults. Human review. |
 | P4.7 | CORE | Change notifier (§2.12): per-batch event index, filters from config, built-in defaults for rust-analyzer, gopls, pyright and the TS server. |
@@ -596,6 +634,8 @@ For rust-analyzer, freshness after external changes needs no watcher client (V12
 - a scenario measures edit-to-view freshness and records the number (the target is O-8).
 
 ## 13. P5 — live mounts (not gated, D2)
+
+**Status (2026-10-01):** ☐ Needs P2.2 (`ViewFs`). The spikes are its seed: on macOS the S2 directory-mtime rule is required.
 
 | ID | Tag | Task |
 |---|---|---|
@@ -612,6 +652,8 @@ For rust-analyzer, freshness after external changes needs no watcher client (V12
 
 ## 14. P6 — user and agent tagging (D6)
 
+**Status (2026-10-01):** ☐ The P6.1 drafts await review, as do D11 and D12.
+
 | ID | Tag | Task |
 |---|---|---|
 | P6.1 | SPEC | `features/tags/*.feature`: tag, untag and list via the CLI; reserved names; orphans; re-pointing after a rename; the tags file format and its merge behaviour; plus the §2.10 operation mapping and the §2.11 guard. Human review. |
@@ -627,6 +669,8 @@ For rust-analyzer, freshness after external changes needs no watcher client (V12
 - the §2.10 and §2.11 features pass on each live backend.
 
 ## 15. P7 — view plugins and Mermaid diagrams (D8)
+
+**Status (2026-10-01):** ☐ The P7.1 drafts await review.
 
 | ID | Tag | Task |
 |---|---|---|
