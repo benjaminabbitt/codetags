@@ -234,8 +234,8 @@ jobs:
           path: ${{ runner.temp }}/bdd-ran.txt
           if-no-files-found: warn
 
-  # PLAN.md §5: the pinned SCIP providers against tests/fixtures (P1.4 on).
-  # `just baseline-check` joins this job with P1.8.
+  # PLAN.md §5: the pinned SCIP providers against tests/fixtures (P1.4 on),
+  # and their edge counts against tests/baselines (P1.8).
   providers:
     name: providers (${{ matrix.os }})
     strategy:
@@ -332,6 +332,18 @@ jobs:
         env:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
         run: ci/run-deelevated.ps1 just test-providers
+
+      # Per-file edge counts of each ingested fixture against tests/baselines
+      # (P1.8): a provider that silently reads less fails here.
+      - name: just baseline-check
+        if: runner.os != 'Windows'
+        shell: bash
+        run: just baseline-check
+
+      - name: just baseline-check (de-elevated)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ci/run-deelevated.ps1 just baseline-check
 
       # Dogfooding (D10, M1): index this repo. Fails on any provider failure
       # or canonical-name collision (P1.3c).
