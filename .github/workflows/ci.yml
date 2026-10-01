@@ -51,7 +51,9 @@ jobs:
         shell: bash
         run: cargo clean -p libduckdb-sys
 
-      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
 
       - uses: taiki-e/install-action@v2
         with:
@@ -125,7 +127,9 @@ jobs:
         shell: bash
         run: cargo clean -p libduckdb-sys
 
-      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
 
       # Runner setup, not product code, so sudo is allowed here. Images from
       # 2026-07-26 on ship a non-setuid /usr/local/bin/fusermount3 that
@@ -198,7 +202,9 @@ jobs:
         shell: bash
         run: cargo clean -p libduckdb-sys
 
-      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
 
       - name: Assert unprivileged
         shell: bash
@@ -256,7 +262,9 @@ jobs:
         shell: bash
         run: cargo clean -p libduckdb-sys
 
-      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
 
       # The Go toolchain for scip-go and tools/gocallgraph (P1.5), at the
       # version providers.toml pins. setup-go puts `go env GOPATH`/bin, where
@@ -357,7 +365,9 @@ jobs:
         shell: bash
         run: cargo clean -p libduckdb-sys
 
-      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
 
       # Runner setup, not product code, so elevation is fine here.
       - name: Install WinFsp
