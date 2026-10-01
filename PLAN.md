@@ -70,10 +70,11 @@ of tagma's `PLAN.md`:
 | D12 | **Recursion guard** (§2.11). **DRAFT, for review.** Every mutating operation goes through one serialized queue, deletes are buffered, and a decaying counter detects recursive operations and holds them. | none |
 | D13 | **Change notifier** (§2.12). **DRAFT, for review.** Watcher events become tagged items. Per-consumer filters, written as tagma postfix queries over file name, extension, metadata and tags, decide what each language server is sent. | brief §4.3 "Routing" |
 | D14 | **Zero changes to lspmux, if at all possible** (2026-10-01). Use upstream lspmux unmodified, as an installed and pinned tool rather than a vendored fork, and build our pieces around it: shim, watcher and config. Its transport stays as upstream has it: loopback TCP by default, which is fine. If lspmux can't meet a requirement unmodified, the requirement becomes an upstream PR or an accepted gap. A local change is the last resort, only when we must; lspmux is mature enough that it probably won't come to that. P3 is being re-planned from an analysis (`docs/proxy-zero-change.md`). | Overrides brief §2 "Proxy base: fork or extend lspmux" and "local transport only: Unix socket", C1, and D9's lspx carve-out (no EUPL code in this repo). Brief §2's "never listen on a non-loopback TCP port" still holds, through upstream's default config. |
+| D15 | **No escaping in names or paths** (2026-10-01). Paths use raw tagma syntax on every OS; values that need it are quoted the tagma way (`"..."`). The only character no filesystem allows in a name, `/`, is kept out of values by data design, not escaped. On Windows, the characters Win32 forbids go through the Cygwin/MSYS2/WSL private-use mapping, which the WinFsp backend and the Windows static tree decode and encode (⚠ verified in S4). | Supersedes §2.7's percent-encoded path profile, C6 and O-4. |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
-The planning agent derived these from D1–D14 and from research. Each is a default the human may overturn.
+The planning agent derived these from D1–D15 and from research. Each is a default the human may overturn.
 
 - **C1. Transport.** *Superseded by D14:* upstream lspmux's transport, loopback TCP by default. Cross-machine use goes through SSH TCP port forwarding (`ssh -L`), which works between any of the three OSes.
 - **C2. Watcher.**
@@ -90,7 +91,7 @@ The planning agent derived these from D1–D14 and from research. Each is a defa
   - The file is line-oriented, in tagma's `<id> <tag>...` format, so tags diff, merge, and review in git (D5, D6).
   - The DuckDB file is also in the project but gitignored. It is binary, regenerated, and unmergeable.
   - The brief's non-goal "database as source of truth" still holds. DuckDB is derived from the source code alone, and user tags, the only primary data, live in the text file.
-- **C6. Path profile.** Each path component under `q/` is percent-decoded before tagma parses it, so every tagma character can be expressed on Windows (§2.7).
+- **C6. Path profile.** *Superseded by D15:* raw tagma syntax in paths, quoting rather than escaping, and the private-use mapping on Windows (§2.7).
 - **C7. Views and mounts stay outside every workspace** (brief §4.5). Only `.codetags/`, which holds data and never views, lives in the project.
 - **C8. Plugin kinds** (§2.9).
   - D8 puts every view behind a `ViewPlugin`.
@@ -169,11 +170,11 @@ optional, admin-installed: codetags-privhelper (fanotify | USN journal) ─> eve
 
   ```text
   file:src/billing/charge.rs owner=billing risk=high
-  file:docs/My%20Notes.md area=docs
+  "file:docs/My Notes.md" area=docs
   ```
 
   - Item ids use `<kind>:` prefixes: `file:` and, later, `sym:`.
-  - Ids are percent-encoded with the path profile (§2.7), because tagma's `add_line` keeps a quoted id's quotes and does not decode it (V21).
+  - An id containing whitespace or `"` is quoted the tagma way (D15). tagma's `add_line` keeps a quoted id's quotes and doesn't decode them (V21), so codetags decodes ids itself.
   - codetags parses the file itself: it splits with `tagma_core::token::split_unquoted_whitespace`, parses each tag with `Tag::parse`, and calls `add_item`.
 - **[OPEN] O-2:** a local-only personal tag file (`.codetags/local/tags`, ignored) alongside the shared one. Default: the shared file only.
 
@@ -228,23 +229,27 @@ Why the other candidates are not v1 backends:
 - **Dokany:** stale.
 - **WebDAV:** deprecated.
 
-### 2.7 Names and path profile
+### 2.7 Names and paths (D15)
 
-- **Canonical symbol names** are dotted (brief §4.5), derived from SCIP descriptors:
-  - `::` becomes `.`.
-  - An overload disambiguator becomes `+N`, mirroring SCIP's `(+N)`.
-  - Any character outside `[A-Za-z0-9_.+-]` is percent-encoded.
-
-  So every canonical name is both a tagma bare-token and a legal filename on all three OSes.
-- **Path profile.**
-  - Every `q/` component is percent-decoded (`%XX`, UTF-8), then parsed as exactly one tagma postfix element.
-  - On Linux and macOS, raw tagma syntax also works (`'q/prov:source=scip'`).
-  - On Windows, the encoded form is required for `: < > " * \ |` (`q/prov%3Asource=scip`).
-  - `%` itself is always written `%25`, and a `/` inside a value is always written `%2F`.
-  - Windows device names (`CON`, `NUL`, …) and trailing `.` or space are also encoded; the exact rules come from spike S4.
+- **Canonical symbol names** are dotted (brief §4.5), built from SCIP descriptors, and otherwise keep their **real characters**:
+  - Descriptor separators and Rust `::` become `.`. An overload disambiguator `(+N)` becomes `+N`.
+  - Generics, `$`, `#` and the like stay as they are, e.g. `billing.Charge<T>.apply`.
+  - Package paths containing `/` (Go, TS) are rendered dotted (`github.com.acme.billing`). The exact SCIP symbol stays in DuckDB, so a canonical name only needs to be unique; it is never decoded.
+  - **Invariant:** no canonical name contains `/` or a control character. Two symbols with the same canonical name are a reported collision, never silently merged.
+- **Values never contain `/`, by design.**
+  - Modules and packages are dotted.
+  - File locations are faceted as ancestor segments (`fs:dir=src`, `fs:dir=billing`, multi-valued like `module`) and as the file name (`fs:name=charge.rs`).
+  - Path-shaped matching uses tagma's `~`, where `.` matches any single character, `/` included: `file~src.billing.charge.rs`.
+  - Files are browsed as nested directories under `@files/`, never as a single path component.
+- **Paths are raw tagma.** Each `q/` component is exactly one tagma postfix element, as typed: `'q/prov:source=scip/line>50'`. A value containing tagma syntax or spaces is quoted the tagma way: `'q/calls="billing.Charge<T>.apply"'`. Agents single-quote whole query paths for the shell (brief §4.5).
+- **Linux and macOS** allow everything except `/` and NUL in a name, so nothing more is needed. Finder displays `:` as `/`, which is cosmetic.
+- **Windows (⚠ verified in S4).** Win32 forbids `" * : < > ? |`. Cygwin, MSYS2 (Git Bash) and WSL map those characters to private-use code points (U+F000 plus the ASCII code) when calling Windows.
+  - The WinFsp backend decodes those code points back to ASCII on input and encodes them on output.
+  - The Windows Tier 0 writer stores them the same way.
+  - Agents in Git Bash or WSL therefore type and see the real characters. Native PowerShell and Explorer users see private-use glyphs and use the `codetags q` CLI instead.
+  - Device names (`CON`, `NUL`, …) and trailing `.` or space follow S4's findings.
 - **Result groups** are directories whose names start with `@` (`@files/`, `@symbols/`, `@sites/`). `@` can never start a tagma token, so a result name can never be mistaken for a query element.
-- **Case-folding collisions.** When the materialized tree lands on a case-insensitive filesystem (APFS/NTFS default), colliding names only get a deterministic suffix, `~<6 hex of id hash>`.
-- **[OPEN] O-4:** whether to upstream the path profile into tagma's SPEC as a normative "path form". That would be a human-approved tagma change. Default: it stays codetags-local, in `docs/path-profile.md` plus features.
+- **Case-folding collisions.** When the materialized tree lands on a case-insensitive filesystem (APFS/NTFS default), only the colliding names get a deterministic suffix, `~<6 hex of id hash>`.
 
 ### 2.8 Security
 
@@ -509,7 +514,7 @@ Because of D2, mount risk is retired early. Each spike:
 | ID | Tag | Task |
 |---|---|---|
 | P1.1 | CORE | `codetags-model`: the brief's schema plus `run` and `file` tables, and the generation store (write, complete, open-latest, GC). Scenario: a reader holds generation N while a writer completes N+1. |
-| P1.2 | CORE | `codetags-names`: canonical names and path profile. Property tests: every name is a tagma bare-token and a legal filename on all OSes, and encoding round-trips. |
+| P1.2 | CORE | `codetags-names` (D15): the SCIP symbol parser and canonical names (dotted, real characters, no `/`, collisions reported), the Windows private-use mapping, item ids for the tags file (tagma quoting when needed), and collision suffixes. Property tests: names never contain `/` or control characters; the private-use mapping round-trips; suffixes leave no case-fold collisions. |
 | P1.3 | CORE | SCIP ingest: attribute each reference to the innermost enclosing range; capture functions used as values; record control context and literal names (brief rules). |
 | P1.4 | CORE | Rust provider (`rust-analyzer scip`): filter `local N`, expand trait and `dyn` calls. |
 | P1.5 | CORE | Go provider: `scip-go` plus `tools/gocallgraph`, joined by call site. |
@@ -637,7 +642,7 @@ This no longer gates anything (D2).
 | O-1 | **Resolved by D9.** tagma is now BSD-3-Clause, as of tagma `b1ae808` (2026-10-01). WinFsp's FLOSS exception does cover BSD-3 (V14), on two conditions:<br>• we show its attribution notice;<br>• we never link or distribute it with proprietary software.<br>So a proprietary downstream fork would lose the exception for the WinFsp backend. That is their concern, not ours. | resolved |
 | O-2 | A local-only personal tag file. | shared file only |
 | O-3 | Add `remove_item` to tagma (now on the tagging hot path). | clone-and-apply per write; revisit if the P6.3 benchmark fails |
-| O-4 | Upstream the path profile into tagma's SPEC. | codetags-local |
+| O-4 | Upstream the path profile into tagma's SPEC. | **obsolete (D15):** there is no path profile |
 | O-5 | macOS NFS loopback is reachable by other local users. | accept, with the §2.8 mitigations |
 | O-6 | Untagging by unlinking an entry in a query directory. | **superseded by D11:** `rm` untags, guarded by §2.11 |
 | O-7 | Should file items in `q/` show the `.skel` view or the raw source? | **superseded by D11:** raw source under `@files/`, skeletons under `@skel/` |
@@ -665,7 +670,7 @@ This no longer gates anything (D2).
 | R4 | The macOS NFS client caches despite `actimeo=0`, e.g. negative-name caching. | Spike S2 measures it. |
 | R5 | Proving "unprivileged" on Windows runners, which run as admin. | V18. |
 | R6 | Runner images drift; the `fusermount3` shadow is an example. | `codetags doctor` plus pinned runner labels. |
-| R7 | Deep query paths hit Windows' 260-character MAX_PATH and case-insensitive name handling on Windows and macOS. | The path profile; tests at the limits. |
+| R7 | Deep query paths hit Windows' 260-character MAX_PATH and case-insensitive name handling on Windows and macOS. | Collision suffixes; tests at the limits; the `codetags q` CLI as the fallback |
 | R8 | libduckdb-sys downloads the prebuilt DuckDB archive over HTTPS without checking a checksum (V29), so a tampered or replaced release asset would be linked into development and CI builds. | A later task pins the archive's hash for each target and checks it before the library is used. |
 
 ---
@@ -713,7 +718,7 @@ These are defaults. Once `features/views` and `features/tags` are approved, the 
 **Lookup in `q/<query>`.**
 
 - A name starting with `@` is a result group, or `@views`.
-- Any other name is percent-decoded and appended to the query as the next postfix element:
+- Any other name is appended to the query, as typed, as the next postfix element (on Windows, after private-use decoding; D15):
   - If the result is a valid prefix, it is a directory.
   - If it is invalid (e.g. operator underflow), the lookup returns ENOENT.
 - `readdir` lists only result groups, so traversal is finite.
