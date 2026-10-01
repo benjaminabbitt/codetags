@@ -27,6 +27,11 @@ you were given.
    command that builds, tests, or installs, first
    `export TMPDIR=/home/babbitt/.cache/codetags-tmp`. Write files with the
    file tools, not shell heredocs (zsh heredocs need `/tmp`).
+   **Disk is tight** (`/home` is shared, and every worktree has its own
+   `target/`). Also `export CARGO_INCREMENTAL=0` in those commands, and check
+   `df -h /home` before big builds. If free space drops under about 10 GB,
+   delete your own worktree's `target/debug/incremental` and report it. Never
+   delete outside your worktree.
 4. **Cargo.** Every cargo invocation selects `--workspace`, as the recipes do.
    Narrower selections unify features differently and rebuild dependencies.
    Never enable duckdb's `bundled` feature in development.
