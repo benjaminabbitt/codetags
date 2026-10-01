@@ -417,11 +417,15 @@ Then the file {string} in the scenario's directory holds the JSON:
 `codetags-lsp record` (PLAN.md D18) between a scripted client and a fake
 language server: the BDD runner's own executable in child mode `fake-lsp`.
 The fake server prints `fake-lsp 9.9.9` for `--version`. Otherwise it
-answers `initialize` with response 1 (its headers in the order
-`Content-Type`, `Content-Length`), then sends a `window/logMessage`
+answers `initialize` with a response of the same id (its headers in the
+order `Content-Type`, `Content-Length`), then sends a `window/logMessage`
 notification and a `client/registerCapability` request with id 900; it
-answers `shutdown` with response 2, and stops at `exit` or end of input. It
-always exits with the status its `Given` step names.
+answers `shutdown` and every other request with a `null` result, and stops
+at `exit` or end of input. A `fake/askConfiguration` request is answered
+with the result of a `workspace/configuration` request (one item) that it
+sends the client first. It always exits with the status its `Given` step
+names. Under the shim (below) it also appends a JSON line to a log as it
+starts and for each message it receives, which the shim's `Then` steps read.
 
 ```gherkin
 Given a fake language server                          # exits with status 0
@@ -548,6 +552,72 @@ Then no lspmux daemon is answering
 Then an lspmux daemon is answering               # the home's socket (Windows: its port) accepts
 Then the lspmux daemon was started {int} time(s) # start lines in the daemon's log
 ```
+
+## The LSP shim (M3 stages 1 and 2)
+
+`codetags-lsp serve` (and wrappers that run it) between scripted sessions and
+the fake language server above, through a real lspmux
+(`features/lsp/shim.feature`; PLAN.md D14-D22). The sessions need an isolated
+home with lspmux set up (above). The shim runs with `--server <the fake
+server> --lspmux <lspmux>` in the scratch project (`project`, holding
+`src/lib.rs`), and the fake server logs to the scenario's own file. A session
+reads the shim's output on its own thread and waits up to 60 s for each
+answer. Sessions are killed, and the daemons the shim started (named in the
+daemon's log) with their servers, when the scenario ends.
+
+```gherkin
+Given the project is a Cargo workspace with the member crate {string}
+      # Cargo.toml with [workspace] members = [<crate>], and the crate's own
+      # Cargo.toml; sessions then pass --root cargo
+When codetags-lsp serve runs the fake server as the {string} with the arguments {string}
+      # role; args after `--`, split on whitespace; stdin empty; captures
+      # exit status, stdout, stderr
+When an {string} session {string} starts through codetags-lsp serve
+      # role, name: initialize (id 1) naming the project as rootUri, rootPath
+      # and only workspace folder, with empty capabilities; waits for its
+      # answer, which must be a result; then initialized
+When an {string} session {string} starts through codetags-lsp serve in {string}
+      # the same, for a directory under the project
+When the {string} sessions {string} and {string} start at once through codetags-lsp serve
+      # both shims start and send initialize before either is answered
+When an {string} session {string} sends an initialize with {int} workspace folders
+      # waits for the answer, closes the input, waits for the shim to exit
+When session {string} sends {string} for {string}
+      # a notification for a project file: textDocument/didOpen, didChange,
+      # didSave or didClose, or workspace/didChangeWatchedFiles
+When session {string} asks {string} for {string}
+      # a request (textDocument and position params) for a project file;
+      # waits for its answer
+When session {string} shuts down and is killed without exit
+      # shutdown, its answer, then a kill, as Claude Code does (V115)
+Given a wrapper {string} that runs the fake server as the {string}
+      # `codetags-lsp install-wrapper` into the scratch directory
+When the wrapper {string} runs with the arguments {string}
+      # started by its path without an extension, as an editor would (V119);
+      # stdin empty; captures exit status, stdout, stderr
+When a VS Code-style session {string} runs through the wrapper {string}
+      # initialize with VS Code-like capabilities (configuration,
+      # workDoneProgress, watched-files dynamic registration), initialized,
+      # didOpen, didChange, didChangeWatchedFiles, a hover request, shutdown,
+      # exit; waits for the wrapper to exit
+When the recorded Claude Code session {string} replays through codetags-lsp serve as the {string}
+      # the client messages of tests/fixtures/lsp/<name>.jsonl, in order, with
+      # /project respelled as the scratch project; waits for the answer to
+      # its shutdown, then kills the shim
+Then session {string} got the error {int} for its initialize
+Then session {string}'s answer to {string} was {string}   # the result, JSON compared parsed
+Then session {string} exited with status {int}
+Then the fake server was started {int} time(s)   # fake-server processes, from its log
+Then the fake server received {string} {int} time(s)
+Then the fake server received no {string}
+Then the fake server received no document notifications   # no didOpen, didChange, didSave or didClose
+Then the fake server's initialize named the project root
+      # rootUri and workspaceFolders[0].uri are the project's URI
+Then the fake server's initialize did not advertise {string}   # a dotted capability path
+```
+
+`it exits with status {int}` and `stdout matches {string}` (Commands) apply
+to `codetags-lsp serve` and wrapper runs.
 
 ## Scenario tags
 

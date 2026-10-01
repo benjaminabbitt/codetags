@@ -1,4 +1,5 @@
-//! `codetags-lsp`: record a language-server session, or summarize a
+//! `codetags-lsp`: the LSP shim between clients and lspmux (`serve`), its
+//! wrappers, and the stage-0 recorder: record a language-server session, or summarize a
 //! recording (M3 stage 0, PLAN.md D18).
 
 use std::ffi::OsString;
@@ -50,6 +51,78 @@ enum Command {
         #[arg(long)]
         marks: Option<PathBuf>,
     },
+    /// Stand in for a language server and share it through lspmux: start
+    /// `lspmux server` if nothing answers, then relay the session through
+    /// `lspmux client`. Non-LSP invocations (`--version`, subcommands) run
+    /// the server directly.
+    Serve {
+        /// Who the client is: `editor` sends document contents; `agent`
+        /// never does, and the server reads files from disk.
+        #[arg(long)]
+        role: codetags_lsp::policy::Role,
+        /// The real language server binary (absolute, or found on PATH).
+        #[arg(long)]
+        server: PathBuf,
+        /// The lspmux binary; by default $CODETAGS_LSPMUX,
+        /// .codetags/local/bin/lspmux, or lspmux on PATH.
+        #[arg(long)]
+        lspmux: Option<PathBuf>,
+        /// Log the session as `record` does (dropped and locally answered
+        /// messages are marked). `{ts}` and `{pid}` are expanded.
+        #[arg(long)]
+        log: Option<PathBuf>,
+        /// A subcommand that still starts an LSP session. Repeatable.
+        #[arg(long = "lsp-subcommand", value_name = "NAME")]
+        lsp_subcommands: Vec<String>,
+        /// How to find the project root: `cargo` (the default for
+        /// rust-analyzer) or `client` (the root the client sent).
+        #[arg(long, value_parser = parse_root_rule)]
+        root: Option<codetags_lsp::root::RootRule>,
+        /// Arguments for the server, after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
+    /// Install a wrapper: a copy of this binary at DEST that runs `serve`
+    /// with these settings whatever its name, for clients that can start
+    /// only an executable (Windows).
+    InstallWrapper {
+        /// The session role.
+        #[arg(long)]
+        role: codetags_lsp::policy::Role,
+        /// The real language server binary.
+        #[arg(long)]
+        server: PathBuf,
+        /// The lspmux binary, if not the default.
+        #[arg(long)]
+        lspmux: Option<PathBuf>,
+        /// A session log template.
+        #[arg(long)]
+        log: Option<PathBuf>,
+        /// Where to put the wrapper (`.exe` is added on Windows).
+        dest: PathBuf,
+    },
+}
+
+fn parse_root_rule(text: &str) -> Result<codetags_lsp::root::RootRule, String> {
+    match text {
+        "cargo" => Ok(codetags_lsp::root::RootRule::Cargo),
+        "client" => Ok(codetags_lsp::root::RootRule::Client),
+        other => Err(format!(
+            "unknown root rule {other:?}: expected cargo or client"
+        )),
+    }
+}
+
+/// Ends the process the way a `serve` run ended.
+fn serve_exit(result: Result<codetags_lsp::serve::Outcome, String>) -> ExitCode {
+    match result {
+        Ok(codetags_lsp::serve::Outcome::Status(status)) => exit_like(status),
+        Ok(codetags_lsp::serve::Outcome::Code(code)) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("codetags-lsp: {error}");
+            ExitCode::from(FAILURE)
+        }
+    }
 }
 
 /// Reads `path` as text, reporting a failure on stderr.
@@ -64,7 +137,53 @@ fn read_text(path: &std::path::Path) -> Option<String> {
 }
 
 fn main() -> ExitCode {
+    // Started under another name: a wrapper (codetags_lsp::wrapper).
+    if let Some(exe) = codetags_lsp::wrapper::invoked_as_wrapper() {
+        let args = std::env::args_os().skip(1).collect();
+        return serve_exit(codetags_lsp::wrapper::run(&exe, args));
+    }
     match Cli::parse().command {
+        Command::Serve {
+            role,
+            server,
+            lspmux,
+            log,
+            lsp_subcommands,
+            root,
+            args,
+        } => serve_exit(codetags_lsp::serve::run(&codetags_lsp::serve::Options {
+            role,
+            server,
+            args,
+            lspmux,
+            log,
+            lsp_subcommands,
+            root_rule: root,
+        })),
+        Command::InstallWrapper {
+            role,
+            server,
+            lspmux,
+            log,
+            dest,
+        } => {
+            let settings = codetags_lsp::wrapper::Settings {
+                role,
+                server,
+                lspmux,
+                log,
+            };
+            match codetags_lsp::wrapper::install(&dest, &settings) {
+                Ok(exe) => {
+                    println!("codetags-lsp: installed the wrapper {}", exe.display());
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("codetags-lsp: {error}");
+                    ExitCode::from(FAILURE)
+                }
+            }
+        }
         Command::Record {
             server,
             log,

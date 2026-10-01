@@ -20,8 +20,13 @@ const IN_ENV: &str = "CODETAGS_BDD_FAKE_LSP_IN";
 /// File the fake server writes every byte it sent to.
 const OUT_ENV: &str = "CODETAGS_BDD_FAKE_LSP_OUT";
 /// The fake server's exit status, for `exit`, end of input, and `--version`.
-const STATUS_ENV: &str = "CODETAGS_BDD_FAKE_LSP_STATUS";
-const MODE_ENV: &str = "CODETAGS_BDD_CHILD";
+pub(crate) const STATUS_ENV: &str = "CODETAGS_BDD_FAKE_LSP_STATUS";
+/// File every fake server process appends a JSON line to as it starts
+/// (`{"pid":…,"event":"start"}`) and for each message it receives
+/// (`{"pid":…,"msg":…}`), as it happens: the shim's tests read it while the
+/// server still runs under lspmux.
+pub(crate) const LOG_ENV: &str = "CODETAGS_BDD_FAKE_LSP_LOG";
+pub(crate) const MODE_ENV: &str = "CODETAGS_BDD_CHILD";
 
 /// What an `features/lsp` scenario set up and observed.
 #[derive(Debug, Default)]
@@ -239,12 +244,36 @@ fn no_recording_was_written(world: &mut CodetagsWorld) {
     assert!(!log.exists(), "{} exists", log.display());
 }
 
+/// Appends one JSON line to the fake server's log, if [`LOG_ENV`] names one.
+fn fake_log(record: serde_json::Value) {
+    let Some(path) = std::env::var_os(LOG_ENV) else {
+        return;
+    };
+    let mut line = record.to_string();
+    line.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .expect("open the fake server's log");
+    file.write_all(line.as_bytes())
+        .expect("append to the fake server's log");
+}
+
+/// The id of the `workspace/configuration` request the fake server sends
+/// for `fake/askConfiguration`.
+const CONFIGURATION_ID: &str = "fake-configuration";
+
 /// Child mode [`CHILD_MODE`]: a tiny language server. `--version` prints
 /// `fake-lsp 9.9.9`. Otherwise it answers `initialize` (then sends a
 /// `window/logMessage` notification and a `client/registerCapability`
-/// request with id 900) and `shutdown`, and exits on `exit` or end of input.
-/// It always exits with the status in [`STATUS_ENV`], after writing every
-/// byte it received and sent to the files in [`IN_ENV`] and [`OUT_ENV`].
+/// request with id 900) and `shutdown`, answers every other request with a
+/// `null` result, and exits on `exit` or end of input. A
+/// `fake/askConfiguration` request is answered with the result of a
+/// `workspace/configuration` request it sends the client first. With
+/// [`LOG_ENV`] set, it logs its start and each message as it arrives. It
+/// always exits with the status in [`STATUS_ENV`], after writing every byte
+/// it received and sent to the files in [`IN_ENV`] and [`OUT_ENV`], if set.
 pub(crate) fn fake_server() -> ! {
     let status: i32 = std::env::var(STATUS_ENV)
         .ok()
@@ -254,6 +283,8 @@ pub(crate) fn fake_server() -> ! {
         println!("fake-lsp 9.9.9");
         std::process::exit(status);
     }
+    let pid = std::process::id();
+    fake_log(serde_json::json!({"pid": pid, "event": "start"}));
     let mut stdin = BufReader::new(std::io::stdin().lock());
     let mut stdout = std::io::stdout().lock();
     let (mut received, mut sent) = (Vec::new(), Vec::new());
@@ -262,14 +293,23 @@ pub(crate) fn fake_server() -> ! {
         stdout.flush().expect("flush stdout");
         sent.extend_from_slice(&bytes);
     };
+    // The `fake/askConfiguration` request waiting for the client's answer.
+    let mut asking: Option<serde_json::Value> = None;
     while let Some(body) = fake_read(&mut stdin, &mut received) {
         let message: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+        fake_log(serde_json::json!({"pid": pid, "msg": message}));
+        let id = message
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         match message["method"].as_str() {
             Some("initialize") => {
                 send(
                     frame(
                         TYPE_FIRST,
-                        r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}, "serverInfo":{"name":"fake-lsp é"}}}"#,
+                        &format!(
+                            r#"{{"jsonrpc":"2.0","id":{id},"result":{{"capabilities":{{}}, "serverInfo":{{"name":"fake-lsp é"}}}}}}"#
+                        ),
                     ),
                     &mut sent,
                 );
@@ -288,17 +328,44 @@ pub(crate) fn fake_server() -> ! {
                     &mut sent,
                 );
             }
-            Some("shutdown") => send(
-                frame(PLAIN, r#"{"jsonrpc":"2.0","id":2,"result":null}"#),
+            Some("exit") => break,
+            Some("fake/askConfiguration") if !id.is_null() => {
+                asking = Some(id);
+                send(
+                    frame(
+                        PLAIN,
+                        &format!(
+                            r#"{{"jsonrpc":"2.0","id":"{CONFIGURATION_ID}","method":"workspace/configuration","params":{{"items":[{{"section":"fake"}}]}}}}"#
+                        ),
+                    ),
+                    &mut sent,
+                );
+            }
+            // Every other request, `shutdown` included.
+            Some(_) if !id.is_null() => send(
+                frame(
+                    PLAIN,
+                    &format!(r#"{{"jsonrpc":"2.0","id":{id},"result":null}}"#),
+                ),
                 &mut sent,
             ),
-            Some("exit") => break,
+            None if id == CONFIGURATION_ID => {
+                if let Some(asked) = asking.take() {
+                    let answer = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": asked,
+                        "result": message.get("result").cloned().unwrap_or(serde_json::Value::Null),
+                    });
+                    send(frame(PLAIN, &answer.to_string()), &mut sent);
+                }
+            }
             _ => {}
         }
     }
     for (env, bytes) in [(IN_ENV, &received), (OUT_ENV, &sent)] {
-        let path = std::env::var_os(env).expect("the step sets the fake server's files");
-        std::fs::write(&path, bytes).expect("write the fake server's record");
+        if let Some(path) = std::env::var_os(env) {
+            std::fs::write(&path, bytes).expect("write the fake server's record");
+        }
     }
     std::process::exit(status)
 }

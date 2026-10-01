@@ -23,6 +23,7 @@ mod steps_names;
 mod steps_privhelper;
 mod steps_query;
 mod steps_report;
+mod steps_shim;
 mod steps_store;
 mod steps_watch;
 mod tags;
@@ -118,6 +119,10 @@ pub struct CodetagsWorld {
     // M3 stage 0 (codetags-lsp): state for features/lsp/claude-client*.
     /// The scenario's plan, its Claude Code session, and the analysis.
     claude: steps_claude::ClaudeState,
+    // M3 stage 2 (codetags-lsp serve): state for features/lsp/shim.feature.
+    /// The scripted sessions. Declared before `lspmux`, so they end before
+    /// the home's daemons are killed.
+    shim: steps_shim::ShimState,
     // M3 stage 1 (codetags lsp setup): state for features/lsp/setup.feature.
     /// The isolated home and its lspmux daemons.
     lspmux: steps_lspmux::LspmuxState,

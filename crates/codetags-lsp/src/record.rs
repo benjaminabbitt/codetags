@@ -141,7 +141,7 @@ pub fn pump(input: impl Read, mut output: impl Write, side: Side, log: &Log) -> 
     }
 }
 
-fn copy_flushing(mut input: impl Read, mut output: impl Write) -> io::Result<()> {
+pub(crate) fn copy_flushing(mut input: impl Read, mut output: impl Write) -> io::Result<()> {
     let mut buffer = vec![0; 64 * 1024];
     loop {
         let read = match input.read(&mut buffer) {
@@ -218,9 +218,19 @@ impl Log {
 
     /// Logs one message `side` sent.
     pub fn message(&self, side: Side, frame: &Frame) {
+        self.body(side.as_str(), frame.body(), frame.headers(), None);
+    }
+
+    /// Logs one message `from` sent (`"client"`, `"server"`, or `"shim"`
+    /// for a message the shim wrote itself), with its headers, and with
+    /// `"shim": note` when the shim did something other than pass it on.
+    pub fn body(&self, from: &str, body: &[u8], headers: &[(String, String)], note: Option<&str>) {
         let mut record = Map::new();
-        record.insert("from".into(), json!(side.as_str()));
-        match serde_json::from_slice::<Value>(frame.body()) {
+        record.insert("from".into(), json!(from));
+        if let Some(note) = note {
+            record.insert("shim".into(), json!(note));
+        }
+        match serde_json::from_slice::<Value>(body) {
             Ok(message) => {
                 let kind = Kind::of(&message);
                 record.insert("kind".into(), json!(kind.as_str()));
@@ -230,18 +240,17 @@ impl Log {
                 if let Some(id) = message.get("id") {
                     record.insert("id".into(), id.clone());
                 }
-                record.insert("bytes".into(), json!(frame.body().len()));
+                record.insert("bytes".into(), json!(body.len()));
                 record.insert("msg".into(), message);
             }
             Err(error) => {
                 record.insert("kind".into(), json!(Kind::Invalid.as_str()));
-                record.insert("bytes".into(), json!(frame.body().len()));
+                record.insert("bytes".into(), json!(body.len()));
                 record.insert("msg".into(), Value::Null);
                 record.insert("parse_error".into(), json!(error.to_string()));
-                record.insert("raw".into(), json!(String::from_utf8_lossy(frame.body())));
+                record.insert("raw".into(), json!(String::from_utf8_lossy(body)));
             }
         }
-        let headers = frame.headers();
         if headers
             .iter()
             .any(|(name, _)| !name.eq_ignore_ascii_case("content-length"))
@@ -261,7 +270,7 @@ impl Log {
     }
 }
 
-fn unix_ms() -> u64 {
+pub(crate) fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))

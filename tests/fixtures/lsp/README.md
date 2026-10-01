@@ -1,7 +1,8 @@
 # Recorded Claude Code LSP sessions
 
-Replay fixtures for the shim's tests (P3.4), which will play them back as a
-fake client. They come from the live feature
+Replay fixtures for the shim's tests: `features/lsp/shim.feature` plays
+`document-sync` back through `codetags-lsp serve` as a fake Claude Code
+(M3 stage 2, `docs/lsp-shim.md`). They come from the live feature
 `features/lsp/claude-client.feature` (M3 stage 0, PLAN.md D16-D18), one
 directory per Claude Code version: `claude-code-<version>/`.
 
