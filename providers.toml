@@ -1,0 +1,12 @@
+# Pinned SCIP providers (PLAN.md §4). `just setup-providers` installs them,
+# and `just test-providers` runs features/index/ against tests/fixtures/.
+# After any provider or SCIP-binding upgrade, compare edge counts per file
+# (brief §4.4).
+
+[rust-analyzer]
+# The rust-analyzer rustup component of the pinned toolchain. It must stay
+# equal to `channel` in rust-toolchain.toml (a unit test in codetags-ingest
+# checks this). 1.96.1's rust-analyzer is from 2026-06-26, after enclosing
+# ranges landed on 2025-11-28 (rust-lang/rust-analyzer#21141; V62).
+install = "rustup-component"
+toolchain = "1.96"

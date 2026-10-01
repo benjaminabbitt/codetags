@@ -144,6 +144,35 @@ Then the entries are named:                         # table with columns: id | n
 Then applying them to the entries in reverse order gives the same names
 ```
 
+## SCIP providers
+
+Index features are tagged `@providers` and run in `just test-providers`.
+Fixtures are `tests/fixtures/<name>`. A provider writes its index and any
+build output (`CARGO_TARGET_DIR`) under the scenario's scratch directory,
+never into the fixture. A fixture's index is deterministic, so one process
+indexes each fixture once and its scenarios share the result.
+
+A symbol `{string}` is named by its SCIP descriptors: the symbol without its
+scheme, manager, package and version, e.g. `charge/double().` or
+``charge/impl#[`Charge<T>`][Apply]apply().``. Lines are 1-based.
+
+```gherkin
+When the Rust provider indexes the fixture {string}          # `rust-analyzer scip` on PATH
+When the Rust provider indexes a directory whose Cargo.toml is {string}   # a fresh directory holding only that manifest
+When the Rust provider indexes a directory that does not exist
+Then the provider run succeeds
+Then the provider run fails with stderr matching {string}
+      # the error carries the provider's stderr; Rust `regex` syntax, against that stderr
+Then the index documents are exactly {string}                # whitespace-separated relative paths, compared as sorted sets
+Then every definition of a function or method has an enclosing range
+      # symbols of kind Function, Method or TraitMethod; fails if there are none
+Then the definition of {string} encloses lines {int} to {int}
+Then {string} occurs in {string} on line {int}                # a non-definition occurrence of the symbol in that document
+Then no symbol in the index has a relationship
+Then the document {string} has occurrences of local symbols  # `local N`
+Then filtering local symbols keeps every other occurrence in {string}
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

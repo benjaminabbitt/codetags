@@ -1,0 +1,13 @@
+# Rust provider fixture (PLAN.md §9 P1.4; features/index/rust.feature).
+# No dependencies, so `rust-analyzer scip` indexes it offline.
+[package]
+name = "billing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Its own workspace root: the codetags workspace does not contain it.
+[workspace]

@@ -10,6 +10,7 @@
 mod child;
 pub mod ran;
 mod steps_cli;
+mod steps_index;
 mod steps_model;
 mod steps_mount;
 mod steps_names;
@@ -88,6 +89,9 @@ pub struct CodetagsWorld {
     // P1.2 (codetags-names): state for features/names/.
     /// Path-profile, item-id and collision-suffix state.
     names: steps_names::NamesState,
+    // P1.4 (codetags-ingest): state for features/index/.
+    /// The last SCIP provider run.
+    index: steps_index::IndexState,
 }
 
 impl CodetagsWorld {
