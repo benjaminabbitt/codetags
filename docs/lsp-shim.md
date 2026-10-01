@@ -88,10 +88,23 @@ shim):
 - refuses a multi-root `initialize` with LSP error -32602 itself, so lspmux's
   `assert!` is never reached (R12, V4);
 - normalizes the root to the project root, for rust-analyzer the outermost
-  Cargo workspace containing the crate (brief §4.2), **spelled as the client
-  spelled it** (D23; D26 changes this to the canonical root with URIs rewritten, not built yet, V132), in
-  `workspaceFolders[0]`, `rootUri` and `rootPath`, and sets
-  `CODETAGS_KEY_ROOT` to it (R10, R11);
+  Cargo workspace containing the crate (brief §4.2), **spelled canonically**
+  (D26, superseding D23): symlinks resolved, Windows short names expanded,
+  no `\\?\` prefix. That root goes in `workspaceFolders[0]`, `rootUri` and
+  `rootPath`, and `CODETAGS_KEY_ROOT` is set to it (R10, R11), so every
+  spelling of one checkout shares one server;
+- **rewrites URIs both ways** (D26, `codetags_lsp::uri`) when the client's
+  spelling of the root differs from the canonical one. In every message to
+  the server, any `file:` URI under the client's root, as a JSON string or
+  object key anywhere under `params` or `result`, is respelled under the
+  canonical root, and in every message to the client the reverse. The match
+  is percent-decoded and ignores a drive letter's case. The rest of each URI
+  keeps its own spelling, and URIs outside the root (`~/.cargo`, the
+  standard library) are left alone. When the spellings agree, messages pass
+  as they came. So documents' URIs and the server's own file watcher agree:
+  on macOS a checkout reached through a symlink otherwise never sees a
+  change on disk (V132, V133). lspmux sees only canonical URIs, so its
+  per-client open files (it tracks them by URI) agree across clients too;
 - takes `workspace.didChangeWatchedFiles` out of the client capabilities, and
   drops every client's own `workspace/didChangeWatchedFiles`: rust-analyzer
   then watches files itself (V122) until the stage-3 watcher client feeds it
@@ -145,7 +158,7 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
   job on all three OSes after `just setup-lspmux`): sharing one server
   process, the agent's dropped document messages, the editor's forwarded
   ones, `--version`, multi-root, the daemon on demand and started once, an
-  agent killed without `exit`, root normalization, `workspace/configuration`,
+  agent killed without `exit`, root normalization to the canonical root with URIs rewritten both ways (through a symlink on Linux and macOS, and the identity everywhere), `workspace/configuration`,
   a scripted VS Code-style session through a wrapper, and the recorded Claude
   Code session (`tests/fixtures/lsp`) replayed as the agent.
 - `features/lsp/wiring.feature` (`@lspmux @providers`, CI's `providers` job
@@ -157,7 +170,7 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
   lspmux. It also covers the fallbacks before setup and with a stage-0 shim,
   doctor's `lsp wiring:` line, and V126's on-disk changes reaching
   rust-analyzer with no client telling it, with an editor-opened document as
-  the control.
+  the control, and the same changes through a symlinked checkout (D26).
 - `features/lsp/claude-client.feature`, rule "Through the shim and lspmux"
   (`@claude @linux`, `just test-claude`): Claude Code itself through the
   plugin, the shim and lspmux to rust-analyzer.

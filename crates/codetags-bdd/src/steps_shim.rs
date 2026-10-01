@@ -87,6 +87,27 @@ impl Session {
         }
     }
 
+    /// Waits for a notification `method`, which no step claimed yet.
+    pub(crate) fn notification(&mut self, method: &str) -> Value {
+        let wanted = |message: &Value| message["method"] == method && message.get("id").is_none();
+        if let Some(index) = self.seen.iter().position(wanted) {
+            return self.seen.remove(index);
+        }
+        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.messages.recv_timeout(left) {
+                Ok(message) if wanted(&message) => return message,
+                Ok(message) => self.seen.push(message),
+                Err(_) => panic!(
+                    "no {method} notification within {ANSWER_TIMEOUT:?}; unclaimed: {:?}\n{}",
+                    self.seen,
+                    self.diagnostics()
+                ),
+            }
+        }
+    }
+
     /// Sends a request and waits for its answer.
     pub(crate) fn request(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
@@ -162,11 +183,82 @@ pub(crate) fn project(world: &mut CodetagsWorld) -> PathBuf {
     if let Some(project) = &world.shim.project {
         return project.clone();
     }
-    let project = world.scratch().join("project");
-    std::fs::create_dir_all(project.join("src")).expect("create the project");
-    std::fs::write(project.join("src").join("lib.rs"), "pub fn f() {}\n").expect("write lib.rs");
+    // The canonical spelling, so a client's spelling is the server's (D26):
+    // macOS's temporary directory is behind a symlink, and Windows's may use
+    // a short (8.3) name.
+    let project = canonical(world.scratch()).join("project");
+    make_project(&project);
     world.shim.project = Some(project.clone());
     project
+}
+
+/// A project directory holding `src/lib.rs`.
+fn make_project(project: &Path) {
+    std::fs::create_dir_all(project.join("src")).expect("create the project");
+    std::fs::write(project.join("src").join("lib.rs"), "pub fn f() {}\n").expect("write lib.rs");
+}
+
+/// `path` canonicalized, without Windows's `\\?\` verbatim prefix, as the
+/// shim spells a canonical root (D26).
+pub(crate) fn canonical(path: &Path) -> PathBuf {
+    let resolved = std::fs::canonicalize(path)
+        .unwrap_or_else(|error| panic!("canonicalize {}: {error}", path.display()));
+    let text = resolved.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(local) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(local)
+    } else {
+        resolved
+    }
+}
+
+#[given("the project is reached through a symlink")]
+fn project_through_symlink(world: &mut CodetagsWorld) {
+    assert!(
+        world.shim.project.is_none(),
+        "this step must come before any step that uses the project"
+    );
+    let base = canonical(world.scratch());
+    make_project(&base.join("real").join("project"));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(base.join("real"), base.join("link")).expect("make the symlink");
+    #[cfg(not(unix))]
+    panic!("symlinks need privileges on Windows: this step is for Linux and macOS");
+    #[cfg(unix)]
+    {
+        world.shim.project = Some(base.join("link").join("project"));
+    }
+}
+
+/// A `file:` URI reduced for comparison: percent-decoded, with a Windows
+/// drive letter in lower case.
+fn uri_key(uri: &str) -> String {
+    let mut bytes = Vec::with_capacity(uri.len());
+    let raw = uri.as_bytes();
+    let mut i = 0;
+    while i < raw.len() {
+        let hex = uri
+            .get(i + 1..i + 3)
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (raw[i], hex) {
+            (b'%', Some(byte)) => {
+                bytes.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                bytes.push(byte);
+                i += 1;
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    match text.strip_prefix("file:///") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => {
+            format!("file:///{}{}", rest[..1].to_ascii_lowercase(), &rest[1..])
+        }
+        _ => text,
+    }
 }
 
 #[given(expr = "the project is a Cargo workspace with the member crate {string}")]
@@ -571,6 +663,76 @@ fn fake_initialize_lacks(world: &mut CodetagsWorld, path: String) {
     let initialize = fake_initialize(world);
     let pointer = format!("/params/capabilities/{}", path.replace('.', "/"));
     assert!(initialize.pointer(&pointer).is_none(), "{initialize:#}");
+}
+
+#[then("the fake server's initialize named the canonical project root")]
+fn fake_initialize_canonical_root(world: &mut CodetagsWorld) {
+    let root = canonical(&project(world));
+    let uri = uri_key(&file_uri(&root));
+    let initialize = fake_initialize(world);
+    let params = &initialize["params"];
+    for pointer in ["/rootUri", "/workspaceFolders/0/uri"] {
+        let named = params.pointer(pointer).and_then(Value::as_str).map(uri_key);
+        assert_eq!(
+            named.as_deref(),
+            Some(uri.as_str()),
+            "{pointer}: {initialize:#}"
+        );
+    }
+    assert_eq!(
+        params["rootPath"],
+        json!(root.to_string_lossy()),
+        "{initialize:#}"
+    );
+}
+
+#[then(expr = "the fake server received {string} for the canonical URI of {string}")]
+fn fake_received_canonical(world: &mut CodetagsWorld, method: String, file: String) {
+    let expected = uri_key(&file_uri(&canonical(&project(world)).join(&file)));
+    let records = fake_records(world);
+    let uris: Vec<&str> = records
+        .iter()
+        .filter(|record| record["msg"]["method"] == method.as_str())
+        .filter_map(|record| record["msg"]["params"]["textDocument"]["uri"].as_str())
+        .collect();
+    assert!(
+        uris.iter().any(|uri| uri_key(uri) == expected),
+        "the fake server received {method} for {uris:?}, not {expected}"
+    );
+}
+
+#[then(expr = "session {string}'s answer to {string} named {string} in the client's spelling")]
+fn answer_in_client_spelling(
+    world: &mut CodetagsWorld,
+    name: String,
+    method: String,
+    file: String,
+) {
+    let expected = document(world, &file);
+    let session = session(world, &name);
+    let answer = session
+        .answers
+        .get(&method)
+        .unwrap_or_else(|| panic!("no answer to {method}"));
+    assert_eq!(answer["result"]["uri"], json!(expected), "answer: {answer}");
+}
+
+#[then(
+    expr = "session {string} got the notification {string} naming {string} in the client's spelling"
+)]
+fn notification_in_client_spelling(
+    world: &mut CodetagsWorld,
+    name: String,
+    method: String,
+    file: String,
+) {
+    let expected = document(world, &file);
+    let notification = session(world, &name).notification(&method);
+    assert_eq!(
+        notification["params"]["uri"],
+        json!(expected),
+        "notification: {notification}"
+    );
 }
 
 // --- wrappers and scripted clients ---------------------------------------

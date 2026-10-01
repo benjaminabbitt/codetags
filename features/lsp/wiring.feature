@@ -136,3 +136,32 @@ Feature: After lsp-setup, Claude Code and VS Code share one rust-analyzer
       And session "vscode" opens "src/charge.rs"
       And "src/charge.rs" gets the line "pub const STAGE_OPENED_MARKER: u32 = 8;" before the line starting "pub struct Fee"
       Then for 3 s session "vscode"'s symbols of "src/charge.rs" do not include "STAGE_OPENED_MARKER"
+
+  # D26 (V132). Both clients reach the checkout through a symlink, as a
+  # checkout under a symlinked directory is. On macOS, rust-analyzer's
+  # watcher reports canonical paths, so with the root as the client spells
+  # it nothing on disk ever reached it. The shim gives the server the
+  # canonical root and rewrites URIs both ways.
+  @linux @macos
+  Rule: Through a symlinked path, changes on disk still reach rust-analyzer
+
+    Background:
+      Given lspmux is installed in the scratch checkout
+      And lsp-setup has run in the scratch checkout
+      And the sessions reach the scratch checkout through a symlink
+      When Claude Code's plugin starts its language server as session "claude"
+      And session "claude" searches the workspace for "Ledger" until it is found
+
+    Scenario: Through a symlink, a constant added to a file the agent never opened is found
+      When "src/ledger.rs" gets the line "pub const STAGE_SED_MARKER: u32 = 7;" before the line starting "pub struct Ledger"
+      Then within 10 s session "claude"'s workspace search for "STAGE_SED_MARKER" finds it
+
+    Scenario: Through a symlink, a document the agent opened shows a change made on disk
+      When session "claude" opens "src/charge.rs"
+      And "src/charge.rs" gets the line "pub const STAGE_OPENED_MARKER: u32 = 8;" before the line starting "pub struct Fee"
+      Then within 10 s session "claude"'s symbols of "src/charge.rs" include "STAGE_OPENED_MARKER"
+
+    Scenario: Through a symlink, VS Code finds a constant added to a file it never opened
+      When VS Code starts its rust-analyzer as session "vscode"
+      And "src/ledger.rs" gets the line "pub const STAGE_SED_MARKER: u32 = 7;" before the line starting "pub struct Ledger"
+      Then within 10 s session "vscode"'s workspace search for "STAGE_SED_MARKER" finds it

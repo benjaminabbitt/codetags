@@ -23,5 +23,6 @@ pub mod root;
 pub mod serve;
 pub mod setup;
 pub mod tools;
+pub mod uri;
 pub mod wiring;
 pub mod wrapper;

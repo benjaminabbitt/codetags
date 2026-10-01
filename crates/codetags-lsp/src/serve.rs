@@ -38,9 +38,10 @@ use crate::policy::{self, FromClient, FromServer, Initialize, Role};
 use crate::record::{self, Log};
 use crate::root::RootRule;
 use crate::tools;
+use crate::uri::{self, Rewrite};
 
-/// The routing-key variable holding the project root as the client spells
-/// it (R11): two spellings of one directory get separate servers.
+/// The routing-key variable holding the canonical project root (R11, D26):
+/// every spelling of one directory shares one server.
 pub const KEY_ROOT_ENV: &str = "CODETAGS_KEY_ROOT";
 
 /// What `serve` runs.
@@ -115,7 +116,7 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
     let rule = options
         .root_rule
         .unwrap_or_else(|| RootRule::for_server(&server));
-    let (message, root) = match policy::prepare_initialize(message, rule) {
+    let (message, root, rewrite) = match policy::prepare_initialize(message, rule) {
         Initialize::Reject(error) => {
             let body = error.to_string();
             note(
@@ -132,7 +133,11 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
             drop(out);
             return Ok(refused(editor, &log));
         }
-        Initialize::Forward { message, root } => (message, root),
+        Initialize::Forward {
+            message,
+            root,
+            rewrite,
+        } => (message, root, rewrite),
     };
     let lspmux_binary = match &options.lspmux {
         Some(binary) => binary.clone(),
@@ -175,7 +180,14 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
     write_frame(&mut to_lspmux, body.as_bytes())
         .and_then(|()| to_lspmux.flush())
         .map_err(|error| format!("writing to lspmux: {error}"))?;
-    relay(options.role, editor, child, to_lspmux, from_lspmux, log)
+    relay(
+        options.role,
+        rewrite,
+        editor,
+        child,
+        (to_lspmux, from_lspmux),
+        log,
+    )
 }
 
 /// Logs one message, if there is a log.
@@ -243,6 +255,9 @@ enum Event {
 /// Shared between the two relay directions.
 struct Session {
     role: Role,
+    /// The client's spelling of the root and the canonical one, when they
+    /// differ (D26).
+    rewrite: Option<Rewrite>,
     to_lspmux: Mutex<Option<ChildStdin>>,
     /// The id of the editor's `shutdown` request, once sent.
     shutdown_id: Mutex<Option<Value>>,
@@ -276,14 +291,15 @@ impl Session {
 
 fn relay(
     role: Role,
+    rewrite: Option<Rewrite>,
     editor: FrameReader<BufReader<io::Stdin>>,
     mut child: Child,
-    to_lspmux: ChildStdin,
-    from_lspmux: impl Read + Send + 'static,
+    (to_lspmux, from_lspmux): (ChildStdin, impl Read + Send + 'static),
     log: Option<Arc<Log>>,
 ) -> Result<Outcome, String> {
     let session = Arc::new(Session {
         role,
+        rewrite,
         to_lspmux: Mutex::new(Some(to_lspmux)),
         shutdown_id: Mutex::new(None),
         shut_down: AtomicBool::new(false),
@@ -403,7 +419,10 @@ fn client_to_lspmux(
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(id.clone());
                 }
                 // lspmux gone: keep reading, so `exit` still ends the session.
-                session.to_lspmux(frame.raw());
+                match respelled(session, frame.body(), message.as_ref(), Rewrite::to_server) {
+                    Some(bytes) => session.to_lspmux(&bytes),
+                    None => session.to_lspmux(frame.raw()),
+                };
             }
         }
     }
@@ -445,9 +464,11 @@ fn lspmux_to_client(from_lspmux: impl Read, session: &Session, events: &Sender<E
             }
             FromServer::Forward => {
                 note(&session.log, "server", frame.body(), frame.headers(), None);
+                let respelled =
+                    respelled(session, frame.body(), message.as_ref(), Rewrite::to_client);
                 let mut out = stdout.lock();
                 if out
-                    .write_all(frame.raw())
+                    .write_all(respelled.as_deref().unwrap_or(frame.raw()))
                     .and_then(|()| out.flush())
                     .is_err()
                 {
@@ -467,6 +488,27 @@ fn lspmux_to_client(from_lspmux: impl Read, session: &Session, events: &Sender<E
         }
     }
     let _ = events.send(Event::LspmuxEnded);
+}
+
+/// The framed message, respelled by `direction` (D26), if the session
+/// rewrites URIs and this message held one under the root.
+fn respelled(
+    session: &Session,
+    body: &[u8],
+    message: Option<&Value>,
+    direction: fn(&Rewrite, &mut Value) -> bool,
+) -> Option<Vec<u8>> {
+    let rewrite = session.rewrite.as_ref()?;
+    if !uri::may_hold_file_uri(body) {
+        return None;
+    }
+    let mut message = message?.clone();
+    if !direction(rewrite, &mut message) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    write_frame(&mut bytes, message.to_string().as_bytes()).ok()?;
+    Some(bytes)
 }
 
 fn is_response(message: &Value) -> bool {

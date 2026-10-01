@@ -150,6 +150,23 @@ fn local_dir(world: &CodetagsWorld) -> PathBuf {
     checkout(world).join(".codetags").join("local")
 }
 
+#[given("the sessions reach the scratch checkout through a symlink")]
+fn checkout_through_symlink(world: &mut CodetagsWorld) {
+    let real = checkout(world);
+    let link = real.with_file_name("via-symlink");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real, &link).expect("make the symlink");
+    #[cfg(not(unix))]
+    panic!(
+        "symlinks need privileges on Windows: this step is for Linux and macOS ({})",
+        link.display()
+    );
+    #[cfg(unix)]
+    {
+        world.shim.project = Some(link);
+    }
+}
+
 #[given("lspmux is installed in the scratch checkout")]
 fn lspmux_is_installed(world: &mut CodetagsWorld) {
     let bin = local_dir(world).join("bin");

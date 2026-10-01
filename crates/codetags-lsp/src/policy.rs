@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::root::{self, RootRule};
+use crate::uri::{self, Rewrite};
 
 /// Who is on the other end of the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,13 +125,16 @@ pub fn from_server(role: Role, message: &Value) -> FromServer {
 pub enum Initialize {
     /// Answer the client with this error response; start no session.
     Reject(Value),
-    /// Send this `initialize` on. `root` is the project root, as the client
-    /// spells it, if the message named one.
+    /// Send this `initialize` on.
     Forward {
         /// The rewritten message.
         message: Value,
-        /// The project root.
+        /// The canonical project root (D26), if the message named a root.
         root: Option<PathBuf>,
+        /// The rewrite between the client's spelling of the root and the
+        /// canonical one, for the rest of the session; `None` when they
+        /// agree.
+        rewrite: Option<Rewrite>,
     },
 }
 
@@ -139,7 +143,8 @@ pub enum Initialize {
 /// - more than one workspace folder: an error response (brief §4.2,
 ///   multi-root is [OPEN]), so lspmux's `assert!` is never reached (V4);
 /// - the root (`workspaceFolders[0]`, `rootUri`, `rootPath`) normalized to
-///   the project root under `rule`, in the client's spelling;
+///   the project root under `rule`, spelled canonically (D26), and any other
+///   URI under the client's root respelled to match;
 /// - `capabilities.workspace.didChangeWatchedFiles` removed, so the server
 ///   watches files itself while the shim drops the clients' own events.
 ///   TODO(stage 3): advertise it once the watcher client feeds the server.
@@ -150,6 +155,7 @@ pub fn prepare_initialize(mut message: Value, rule: RootRule) -> Initialize {
         return Initialize::Forward {
             message,
             root: None,
+            rewrite: None,
         };
     }
     let folders = message
@@ -175,15 +181,24 @@ pub fn prepare_initialize(mut message: Value, rule: RootRule) -> Initialize {
     {
         workspace.remove("didChangeWatchedFiles");
     }
-    let root = normalize_root(&mut message, rule);
-    Initialize::Forward { message, root }
+    let (root, rewrite) = match normalize_root(&mut message, rule) {
+        Some((root, rewrite)) => (Some(root), rewrite),
+        None => (None, None),
+    };
+    Initialize::Forward {
+        message,
+        root,
+        rewrite,
+    }
 }
 
-/// Rewrites the root fields of an `initialize` to the project root and
-/// returns it. The client's root comes from `workspaceFolders[0].uri`, else
-/// `rootUri`, else `rootPath`, as lspmux reads it.
-fn normalize_root(message: &mut Value, rule: RootRule) -> Option<PathBuf> {
-    let params = message.get_mut("params")?;
+/// Rewrites the root fields of an `initialize` to the project root, spelled
+/// canonically, and returns that root with the rewrite for the session. The
+/// client's root comes from `workspaceFolders[0].uri`, else `rootUri`, else
+/// `rootPath`, as lspmux reads it. When the client's spelling of the project
+/// root is already canonical, the client's own strings are kept.
+fn normalize_root(message: &mut Value, rule: RootRule) -> Option<(PathBuf, Option<Rewrite>)> {
+    let params = message.get("params")?;
     let folder_uri = params
         .pointer("/workspaceFolders/0/uri")
         .and_then(Value::as_str)
@@ -203,6 +218,32 @@ fn normalize_root(message: &mut Value, rule: RootRule) -> Option<PathBuf> {
         .or_else(|| root_path.as_deref().map(PathBuf::from))?;
     let project = root::project_root(&client_root, rule);
     let levels = root::levels_above(&project, &client_root);
+    // The project root as the client spells it, and canonically.
+    let client_uri = folder_uri.as_deref().or(root_uri.as_deref()).map_or_else(
+        || uri::path_to_uri(&project),
+        |uri| root::uri_parent(uri, levels),
+    );
+    let canonical = root::canonical(&project).unwrap_or_else(|| project.clone());
+    let canonical_uri = uri::path_to_uri(&canonical);
+    let rewrite = Rewrite::new(&client_uri, &canonical_uri);
+    if let Some(rewrite) = &rewrite {
+        rewrite.to_server(message);
+        let params = message.get_mut("params")?;
+        if folder_uri.is_some() {
+            params["workspaceFolders"][0]["uri"] = json!(canonical_uri);
+            if let Some(name) = canonical.file_name() {
+                params["workspaceFolders"][0]["name"] = json!(name.to_string_lossy());
+            }
+        }
+        if root_uri.is_some() {
+            params["rootUri"] = json!(canonical_uri);
+        }
+        if root_path.is_some() {
+            params["rootPath"] = json!(canonical.to_string_lossy());
+        }
+        return Some((canonical, Some(rewrite.clone())));
+    }
+    let params = message.get_mut("params")?;
     if levels > 0 {
         if let Some(uri) = &folder_uri {
             let parent = root::uri_parent(uri, levels);
@@ -220,7 +261,7 @@ fn normalize_root(message: &mut Value, rule: RootRule) -> Option<PathBuf> {
             params["rootPath"] = json!(parent.to_string_lossy());
         }
     }
-    Some(project)
+    Some((canonical, None))
 }
 
 #[cfg(test)]
@@ -281,7 +322,8 @@ mod tests {
         let message = json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
             "capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true},
             "configuration":true}}}});
-        let Initialize::Forward { message, root } = prepare_initialize(message, RootRule::Client)
+        let Initialize::Forward { message, root, .. } =
+            prepare_initialize(message, RootRule::Client)
         else {
             panic!("rejected");
         };
@@ -295,7 +337,9 @@ mod tests {
     #[test]
     fn the_root_moves_up_to_the_cargo_workspace_in_the_clients_spelling() {
         let scratch = tempfile::tempdir().unwrap();
-        let project = scratch.path().join("proj");
+        // Canonical already (macOS's temporary directory is behind a
+        // symlink), so the client's spelling is kept.
+        let project = root::canonical(scratch.path()).unwrap().join("proj");
         std::fs::create_dir_all(project.join("crates/m")).unwrap();
         std::fs::write(
             project.join("Cargo.toml"),
@@ -308,7 +352,8 @@ mod tests {
         let message = json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
             "rootUri": uri, "rootPath": member.display().to_string(),
             "workspaceFolders":[{"uri": uri, "name":"m"}]}});
-        let Initialize::Forward { message, root } = prepare_initialize(message, RootRule::Cargo)
+        let Initialize::Forward { message, root, .. } =
+            prepare_initialize(message, RootRule::Cargo)
         else {
             panic!("rejected");
         };
@@ -329,5 +374,40 @@ mod tests {
                 json!(project.display().to_string())
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_root_becomes_canonical_and_other_uris_follow() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = root::canonical(scratch.path()).unwrap();
+        std::fs::create_dir_all(base.join("real/proj/src")).unwrap();
+        std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+        let client = base.join("link/proj");
+        let uri = format!("file://{}", client.display());
+        let message = json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+            "rootUri": uri, "rootPath": client.display().to_string(),
+            "workspaceFolders":[{"uri": uri, "name":"proj"}],
+            "initializationOptions": {"linked": format!("{uri}/src/lib.rs")}}});
+        let Initialize::Forward {
+            message,
+            root,
+            rewrite,
+        } = prepare_initialize(message, RootRule::Client)
+        else {
+            panic!("rejected");
+        };
+        let canonical = base.join("real/proj");
+        let canonical_uri = format!("file://{}", canonical.display());
+        assert_eq!(root.as_deref(), Some(canonical.as_path()));
+        assert!(rewrite.is_some());
+        let params = &message["params"];
+        assert_eq!(params["rootUri"], json!(canonical_uri));
+        assert_eq!(params["workspaceFolders"][0]["uri"], json!(canonical_uri));
+        assert_eq!(params["rootPath"], json!(canonical.display().to_string()));
+        assert_eq!(
+            params["initializationOptions"]["linked"],
+            json!(format!("{canonical_uri}/src/lib.rs"))
+        );
     }
 }

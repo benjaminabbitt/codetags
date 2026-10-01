@@ -270,7 +270,10 @@ const CONFIGURATION_ID: &str = "fake-configuration";
 /// request with id 900) and `shutdown`, answers every other request with a
 /// `null` result, and exits on `exit` or end of input. A
 /// `fake/askConfiguration` request is answered with the result of a
-/// `workspace/configuration` request it sends the client first. With
+/// `workspace/configuration` request it sends the client first. A
+/// `fake/echoUri` request sends a `fake/uriNotice` notification with
+/// `params.uri`, then answers `{"uri": …}`, both the request's
+/// `textDocument.uri`. With
 /// [`LOG_ENV`] set, it logs its start and each message as it arrives. It
 /// always exits with the status in [`STATUS_ENV`], after writing every byte
 /// it received and sent to the files in [`IN_ENV`] and [`OUT_ENV`], if set.
@@ -340,6 +343,16 @@ pub(crate) fn fake_server() -> ! {
                     ),
                     &mut sent,
                 );
+            }
+            // Echoes the document's URI: first in a notification, then in
+            // the answer.
+            Some("fake/echoUri") if !id.is_null() => {
+                let uri = message["params"]["textDocument"]["uri"].clone();
+                let notice = serde_json::json!({"jsonrpc": "2.0", "method": "fake/uriNotice", "params": {"uri": uri}});
+                send(frame(PLAIN, &notice.to_string()), &mut sent);
+                let answer =
+                    serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {"uri": uri}});
+                send(frame(PLAIN, &answer.to_string()), &mut sent);
             }
             // Every other request, `shutdown` included.
             Some(_) if !id.is_null() => send(

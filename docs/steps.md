@@ -424,7 +424,9 @@ notification and a `client/registerCapability` request with id 900; it
 answers `shutdown` and every other request with a `null` result, and stops
 at `exit` or end of input. A `fake/askConfiguration` request is answered
 with the result of a `workspace/configuration` request (one item) that it
-sends the client first. It always exits with the status its `Given` step
+sends the client first. A `fake/echoUri` request sends a `fake/uriNotice`
+notification whose `params.uri` is the request's `textDocument.uri`, then
+answers with the result `{"uri": <that URI>}`. It always exits with the status its `Given` step
 names. Under the shim (below) it also appends a JSON line to a log as it
 starts and for each message it receives, which the shim's `Then` steps read.
 
@@ -615,12 +617,17 @@ the fake language server above, through a real lspmux
 (`features/lsp/shim.feature`; PLAN.md D14-D22). The sessions need an isolated
 home with lspmux set up (above). The shim runs with `--server <the fake
 server> --lspmux <lspmux>` in the scratch project (`project`, holding
-`src/lib.rs`), and the fake server logs to the scenario's own file. A session
+`src/lib.rs`, at a canonical path: no symlinks, no Windows short names, no
+`\\?\` prefix), and the fake server logs to the scenario's own file. A session
 reads the shim's output on its own thread and waits up to 60 s for each
 answer. Sessions are killed, and the daemons the shim started (named in the
 daemon's log) with their servers, when the scenario ends.
 
 ```gherkin
+Given the project is reached through a symlink
+      # Linux and macOS: the project is made at real/project in the scratch
+      # directory, and the sessions use link/project, with link -> real.
+      # Comes before any step that uses the project
 Given the project is a Cargo workspace with the member crate {string}
       # Cargo.toml with [workspace] members = [<crate>], and the crate's own
       # Cargo.toml; sessions then pass --root cargo
@@ -669,7 +676,20 @@ Then the fake server received no document notifications   # no didOpen, didChang
 Then the fake server's initialize named the project root
       # rootUri and workspaceFolders[0].uri are the project's URI
 Then the fake server's initialize did not advertise {string}   # a dotted capability path
+Then the fake server's initialize named the canonical project root
+      # rootUri and workspaceFolders[0].uri are the canonical project's URI,
+      # and rootPath its path (D26)
+Then the fake server received {string} for the canonical URI of {string}
+      # some such request's textDocument.uri is the file's canonical URI
+Then session {string}'s answer to {string} named {string} in the client's spelling
+      # the answer's result.uri is the file's URI as the session spells it
+Then session {string} got the notification {string} naming {string} in the client's spelling
+      # waits up to 60 s for that notification; its params.uri is the
+      # file's URI as the session spells it
 ```
+
+URIs are compared percent-decoded, with a Windows drive letter in lower
+case, except in the "client's spelling" steps, which compare them exactly.
 
 `it exits with status {int}` and `stdout matches {string}` (Commands) apply
 to `codetags-lsp serve` and wrapper runs.
@@ -707,6 +727,10 @@ Given lsp-setup has run in the scratch checkout
       # script `just lsp-setup` runs, with the built binaries; must exit 0.
       # On Windows it also installs the .exe wrappers (V119), and passes
       # --listen 127.0.0.1:<a free port> to `codetags lsp setup`
+Given the sessions reach the scratch checkout through a symlink
+      # Linux and macOS: a symlink via-symlink -> checkout beside it; from
+      # here on the clients' sessions, the steps' paths and the processes'
+      # working directories use the symlinked path
 Given the scratch checkout's shim is a build with no serve command
       # Linux and macOS: a stand-in .codetags/local/bin/codetags-lsp that
       # exits 2 with clap's "unrecognized subcommand 'serve'" for `serve`, as

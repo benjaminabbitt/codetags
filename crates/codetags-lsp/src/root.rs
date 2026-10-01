@@ -1,7 +1,7 @@
 //! Project roots (brief §4.2): the directory a language server is started
-//! for, found from the root the client sent, and respelled the way the
-//! client spelled it (the P3 draft's review question 5 default: the server's
-//! root and the documents' URIs then share one spelling).
+//! for, found from the root the client sent, and its canonical spelling,
+//! which the server is given (PLAN.md D26; [`crate::uri`] rewrites the
+//! client's URIs to match).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -117,6 +117,29 @@ fn glob_segment(pattern: &[u8], text: &[u8]) -> bool {
     }
 }
 
+/// The canonical spelling of `path` (D26): symlinks resolved, and on Windows
+/// short (8.3) names expanded, but without the `\\?\` verbatim prefix
+/// `canonicalize` adds there, which language servers and editors do not
+/// write. `None` if it cannot be resolved (e.g. it does not exist).
+pub fn canonical(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path)
+        .ok()
+        .map(|resolved| strip_verbatim(&resolved))
+}
+
+/// `path` without a Windows verbatim prefix: `\\?\C:\x` is `C:\x`, and
+/// `\\?\UNC\server\share` is `\\server\share`.
+pub fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(local) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(local)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// The local path a `file:` URI names, percent-decoded; on Windows a
 /// leading `/C:` becomes `C:`. `None` for other schemes or a remote host.
 pub fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
@@ -208,6 +231,30 @@ mod tests {
             file_uri_to_path("file:///c%3A/Users/x").unwrap(),
             PathBuf::from("c:\\Users\\x")
         );
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_stripped() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\Users\x")),
+            PathBuf::from(r"C:\Users\x")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\server\share\x")),
+            PathBuf::from(r"\\server\share\x")
+        );
+        assert_eq!(strip_verbatim(Path::new("/a/b")), PathBuf::from("/a/b"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_resolves_symlinks() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = canonical(scratch.path()).unwrap();
+        std::fs::create_dir(base.join("real")).unwrap();
+        std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+        assert_eq!(canonical(&base.join("link")), Some(base.join("real")));
+        assert_eq!(canonical(&base.join("missing")), None);
     }
 
     #[test]

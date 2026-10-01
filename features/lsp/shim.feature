@@ -5,8 +5,9 @@ Feature: codetags-lsp serve shares one language server between sessions through 
   `lspmux server` first if nothing answers, and relays the session between
   the editor and it. An agent session never sends document contents (D16):
   the server reads files from disk. A multi-root `initialize` gets an LSP
-  error, the root is normalized to the project root in the client's own
-  spelling, and a client's own `workspace/didChangeWatchedFiles` is dropped.
+  error, the root is normalized to the canonical project root with URIs
+  rewritten both ways (D26), and a client's own
+  `workspace/didChangeWatchedFiles` is dropped.
 
   The language server is a fake one, which logs every message it receives
   and answers any request; each scenario has its own home directory, lspmux
@@ -94,14 +95,50 @@ Feature: codetags-lsp serve shares one language server between sessions through 
     Then the fake server received "textDocument/hover" 1 time
     And the fake server received no "workspace/didChangeWatchedFiles"
 
+  # D26: the server gets the canonical project root, and each shim rewrites
+  # its client's spelling of the root to the canonical one in every message
+  # to the server, and back in every message to the client.
   @lspmux
-  Scenario: The server is initialized with the Cargo workspace root, as the client spells it
+  Scenario: A client whose spelling is canonical sees no rewriting
     Given lspmux is set up in an isolated home
     And a fake language server
     And the project is a Cargo workspace with the member crate "crates/member"
     When an "agent" session "claude" starts through codetags-lsp serve in "crates/member"
+    And session "claude" asks "fake/echoUri" for "src/lib.rs"
     Then the fake server's initialize named the project root
     And the fake server's initialize did not advertise "workspace.didChangeWatchedFiles"
+    And the fake server received "fake/echoUri" for the canonical URI of "src/lib.rs"
+    And session "claude"'s answer to "fake/echoUri" named "src/lib.rs" in the client's spelling
+
+  @lspmux @linux @macos
+  Scenario: The server is initialized with the canonical Cargo workspace root
+    Given lspmux is set up in an isolated home
+    And a fake language server
+    And the project is reached through a symlink
+    And the project is a Cargo workspace with the member crate "crates/member"
+    When an "agent" session "claude" starts through codetags-lsp serve in "crates/member"
+    Then the fake server's initialize named the canonical project root
+    And the fake server's initialize did not advertise "workspace.didChangeWatchedFiles"
+
+  @lspmux @linux @macos
+  Scenario: A request in the client's spelling reaches the server in the canonical one
+    Given lspmux is set up in an isolated home
+    And a fake language server
+    And the project is reached through a symlink
+    When an "editor" session "vscode" starts through codetags-lsp serve
+    And session "vscode" asks "textDocument/hover" for "src/lib.rs"
+    Then the fake server received "textDocument/hover" for the canonical URI of "src/lib.rs"
+
+  @lspmux @linux @macos
+  Scenario: The server's canonical URIs reach the client in its own spelling
+    Given lspmux is set up in an isolated home
+    And a fake language server
+    And the project is reached through a symlink
+    When an "editor" session "vscode" starts through codetags-lsp serve
+    And session "vscode" asks "fake/echoUri" for "src/lib.rs"
+    Then the fake server received "fake/echoUri" for the canonical URI of "src/lib.rs"
+    And session "vscode"'s answer to "fake/echoUri" named "src/lib.rs" in the client's spelling
+    And session "vscode" got the notification "fake/uriNotice" naming "src/lib.rs" in the client's spelling
 
   @lspmux
   Scenario: workspace/configuration reaching an agent session is answered by its shim
