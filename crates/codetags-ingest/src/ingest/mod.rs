@@ -12,6 +12,14 @@
 //!   targets. Each has its canonical name (PLAN.md §2.7, D15) and its dotted
 //!   module ancestors. Two symbols with one canonical name are both kept,
 //!   and reported in [`IngestReport::collisions`]; nothing is merged.
+//! - **Impl blocks are containers, not symbols** (P1.3c; a default pending
+//!   human review). rust-analyzer gives some impl blocks a symbol,
+//!   `impl#[Tree]` (V97), which would read as the type's name. It gets no
+//!   `symbol` row and is never a caller, like a module. Its methods keep
+//!   `Type.method` and `Type.Trait.method`.
+//! - **A field named like a method** (a getter) is named `<name>+field`,
+//!   only when it collides (P1.3c; a default pending human review; see
+//!   `codetags_names::canonical::CanonicalNames`).
 //! - **Locals.** `local N` symbols, and parameters, are the discarded local
 //!   scope (brief §4.4): their occurrences are dropped and counted. A call
 //!   through a closure or a function pointer references a local, so it is

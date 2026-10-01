@@ -82,3 +82,48 @@ Feature: Canonical symbol names are dotted and keep their real characters
       | rust-analyzer cargo demo 0.1.0 billing/Charge# |
     When their canonical names are assigned
     Then there are no collisions
+
+  # P1.3c (dogfooding): the policies below are defaults pending human review.
+
+  Scenario Outline: A Rust impl block is a container and has no canonical name
+    When the canonical name of the SCIP symbol "<symbol>" is taken
+    Then the symbol has no canonical name
+
+    Examples:
+      | symbol                                                          |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[Server]            |
+      | rust-analyzer cargo demo 0.1.0 billing/impl#[`Charge<T>`][Apply] |
+
+  Scenario: A field that collides with a method is suffixed +field
+    Given these SCIP symbols:
+      | symbol                                                         |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#                   |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#export_path.       |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]export_path(). |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#root.              |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().      |
+    When their canonical names are assigned
+    Then the assigned names are:
+      | symbol                                                         | name                         |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#                   | spike.Server                 |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#export_path.       | spike.Server.export_path+field |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]export_path(). | spike.Server.export_path   |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#root.              | spike.Server.root            |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]stop().      | spike.Server.stop            |
+    And there are no collisions
+
+  Scenario: A collision the +field suffix does not resolve is still reported
+    Given these SCIP symbols:
+      | symbol                                                     |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#root.          |
+      | rust-analyzer cargo other 0.2.0 spike/Server#root.         |
+      | rust-analyzer cargo demo 0.1.0 spike/impl#[Server]root().  |
+      | rust-analyzer cargo demo 0.1.0 spike/Server#port.          |
+      | rust-analyzer cargo other 0.2.0 spike/Server#port.         |
+    When their canonical names are assigned
+    Then the collisions are:
+      | name                    | symbol                                             |
+      | spike.Server.root+field | rust-analyzer cargo demo 0.1.0 spike/Server#root.  |
+      | spike.Server.root+field | rust-analyzer cargo other 0.2.0 spike/Server#root. |
+      | spike.Server.port       | rust-analyzer cargo demo 0.1.0 spike/Server#port.  |
+      | spike.Server.port       | rust-analyzer cargo other 0.2.0 spike/Server#port. |

@@ -30,12 +30,20 @@
 //!   the `impl` segment is dropped, giving `Charge<T>.Apply.apply`, and an
 //!   inherent method is `Charge<T>.new`. The self type keeps its generics
 //!   as written, so it differs from the type's own name (`Charge`).
+//! - **A Rust impl block is a container, not a symbol** (P1.3c; a default
+//!   pending human review). rust-analyzer gives some impl blocks a symbol of
+//!   their own, ``impl#[Tree]`` (V97), which would otherwise read `Tree`,
+//!   the type's name. [`canonical_name`] returns `None` for one
+//!   ([`is_rust_impl_block`]); its members keep `Type.method` and
+//!   `Type.Trait.method`.
+//! - **A field named like a method gets `+field`**, and only then; see
+//!   [`CanonicalNames`] (P1.3c; a default pending human review).
 //! - **Other type parameters are canonical.** `[T]` becomes a segment `T`
 //!   (scip-typescript's `Charge#[T]` is `Charge.T`).
 //! - **Parameters and locals are not canonical symbols.** `local N`
 //!   symbols are the discarded local scope (brief §4.4), and a symbol with
 //!   any `(param)` descriptor is a function parameter, scoped like a local.
-//!   [`canonical_name`] returns `None` for both.
+//!   [`canonical_name`] returns `None` for both, and for an impl block.
 //!
 //! **Invariant:** a canonical name never contains `/` or a control
 //! character. A descriptor name holding a control character has no
@@ -119,7 +127,37 @@ fn is_rust_impl(symbol: &GlobalSymbol, index: usize, d: &Descriptor) -> bool {
             .is_some_and(|next| next.suffix == Suffix::TypeParameter)
 }
 
+/// Returns `true` for a rust-analyzer impl block itself (``a/impl#[Tree]``,
+/// ``a/impl#[`Charge<T>`][Apply]``): the `impl` type descriptor followed by
+/// nothing but type parameters. An impl block is a container, not a symbol,
+/// so it has no canonical name; see the module documentation.
+pub fn is_rust_impl_block(symbol: &GlobalSymbol) -> bool {
+    symbol
+        .descriptors
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, d)| d.suffix != Suffix::TypeParameter)
+        .is_some_and(|(index, d)| {
+            index + 1 < symbol.descriptors.len() && is_rust_impl(symbol, index, d)
+        })
+}
+
+/// Returns `true` for a field: a term directly under a type, such as
+/// `Server#export_path.` (rust-analyzer, scip-go, scip-typescript all spell
+/// fields and properties this way). A term in a Rust impl block, an
+/// associated constant, is not one: its parent is a type parameter.
+pub fn is_field(symbol: &GlobalSymbol) -> bool {
+    match symbol.descriptors.as_slice() {
+        [.., parent, last] => last.suffix == Suffix::Term && parent.suffix == Suffix::Type,
+        _ => false,
+    }
+}
+
 fn global_segments(symbol: &GlobalSymbol) -> Option<Vec<Segment>> {
+    if is_rust_impl_block(symbol) {
+        return None;
+    }
     let mut out = Vec::with_capacity(symbol.descriptors.len());
     for (index, d) in symbol.descriptors.iter().enumerate() {
         if d.suffix == Suffix::Parameter {
@@ -169,56 +207,119 @@ pub struct Collision {
     pub symbols: Vec<String>,
 }
 
+/// The suffix a field gets when its canonical name collides with a
+/// non-field's, e.g. `spike.Server.export_path+field` beside the getter
+/// `spike.Server.export_path`.
+///
+/// `+` and then letters cannot be mistaken for an overload's `+N`, which is
+/// digits (a non-numeric SCIP disambiguator such as `(x)` also renders as
+/// `+x`; no indexer we know of writes one, and a clash would be reported as
+/// a collision). The result stays a tagma bare token and a legal file name
+/// (V96).
+pub const FIELD_SUFFIX: &str = "+field";
+
 /// Canonical names assigned to a set of symbols, with every collision kept
 /// and reported rather than merged. The result does not depend on the order
 /// symbols are inserted in.
+///
+/// **Field policy** (P1.3c; a default pending human review). A Rust getter
+/// is often named like the field it returns, so the field
+/// (`spike/Server#export_path.`) and the method
+/// (`spike/impl#[Server]export_path().`) share the canonical name
+/// `spike.Server.export_path`. When a canonical name belongs to at least
+/// one field ([`is_field`]) and at least one other symbol, each field
+/// there gets [`FIELD_SUFFIX`]. Fields that collide with nothing, or only
+/// with other fields, keep their plain names. Whatever still collides
+/// afterwards is reported by [`CanonicalNames::collisions`], never merged.
 #[derive(Debug, Clone, Default)]
 pub struct CanonicalNames {
-    /// Canonical name to the distinct SCIP symbols that have it.
-    by_name: BTreeMap<String, BTreeSet<String>>,
+    /// Base canonical name to the distinct SCIP symbols that have it, each
+    /// with whether it is a field.
+    by_name: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 impl CanonicalNames {
-    /// Records `symbol` and returns its canonical name, or `Ok(None)` for a
-    /// symbol that has none (which is not recorded). Inserting the same
-    /// symbol twice is not a collision.
+    /// Records `symbol`, and returns whether it has a canonical name: a
+    /// symbol with none (a local, a parameter, an impl block) is not
+    /// recorded. Inserting the same symbol twice is not a collision. The
+    /// final names, after the field policy, come from
+    /// [`assigned`](Self::assigned).
     ///
     /// # Errors
     ///
     /// As [`canonical_name`].
-    pub fn insert(&mut self, symbol: &Symbol) -> Result<Option<String>, CanonicalError> {
-        let name = canonical_name(symbol)?;
-        if let Some(name) = &name {
-            self.by_name
-                .entry(name.clone())
-                .or_default()
-                .insert(symbol.to_string());
-        }
-        Ok(name)
+    pub fn insert(&mut self, symbol: &Symbol) -> Result<bool, CanonicalError> {
+        let Some(name) = canonical_name(symbol)? else {
+            return Ok(false);
+        };
+        let field = match symbol {
+            Symbol::Global(global) => is_field(global),
+            Symbol::Local(_) => false,
+        };
+        self.by_name
+            .entry(name)
+            .or_default()
+            .insert(symbol.to_string(), field);
+        Ok(true)
     }
 
-    /// Every canonical name shared by more than one symbol, sorted by name.
-    pub fn collisions(&self) -> Vec<Collision> {
-        self.by_name
-            .iter()
-            .filter(|(_, symbols)| symbols.len() > 1)
-            .map(|(name, symbols)| Collision {
-                name: name.clone(),
-                symbols: symbols.iter().cloned().collect(),
+    /// Final name to the symbols that have it, after the field policy.
+    fn resolved(&self) -> BTreeMap<String, BTreeSet<&str>> {
+        let mut out: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+        for (name, symbols) in &self.by_name {
+            let suffix_fields = symbols.len() > 1
+                && symbols.values().any(|&field| field)
+                && symbols.values().any(|&field| !field);
+            for (symbol, &field) in symbols {
+                let name = if suffix_fields && field {
+                    format!("{name}{FIELD_SUFFIX}")
+                } else {
+                    name.clone()
+                };
+                out.entry(name).or_default().insert(symbol);
+            }
+        }
+        out
+    }
+
+    /// Every recorded symbol's final name, by SCIP symbol. A colliding
+    /// symbol is included with the name it shares.
+    pub fn assigned(&self) -> BTreeMap<String, String> {
+        self.resolved()
+            .into_iter()
+            .flat_map(|(name, symbols)| {
+                symbols
+                    .into_iter()
+                    .map(move |symbol| (symbol.to_string(), name.clone()))
             })
             .collect()
     }
 
-    /// The names that belong to exactly one symbol, as `(name, symbol)`,
-    /// sorted by name. Colliding names are left out.
-    pub fn unique(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.by_name.iter().filter_map(|(name, symbols)| {
-            let mut iter = symbols.iter();
-            match (iter.next(), iter.next()) {
-                (Some(symbol), None) => Some((name.as_str(), symbol.as_str())),
-                _ => None,
-            }
-        })
+    /// Every final name shared by more than one symbol, sorted by name.
+    pub fn collisions(&self) -> Vec<Collision> {
+        self.resolved()
+            .into_iter()
+            .filter(|(_, symbols)| symbols.len() > 1)
+            .map(|(name, symbols)| Collision {
+                name,
+                symbols: symbols.into_iter().map(str::to_string).collect(),
+            })
+            .collect()
+    }
+
+    /// The final names that belong to exactly one symbol, as
+    /// `(name, symbol)`, sorted by name. Colliding names are left out.
+    pub fn unique(&self) -> Vec<(String, String)> {
+        self.resolved()
+            .into_iter()
+            .filter_map(|(name, symbols)| {
+                let mut iter = symbols.into_iter();
+                match (iter.next(), iter.next()) {
+                    (Some(symbol), None) => Some((name, symbol.to_string())),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 }
 
@@ -254,6 +355,65 @@ mod tests {
         );
         // Only rust-analyzer's impl blocks are rewritten.
         assert_eq!(name("other m n v impl#[T]f()."), some("impl.T.f"));
+    }
+
+    #[test]
+    fn rust_impl_blocks_themselves_have_no_name() {
+        let p = "rust-analyzer cargo demo 0.1.0 ";
+        assert_eq!(name(&format!("{p}spike/impl#[Tree]")), None);
+        assert_eq!(name(&format!("{p}charge/impl#[`Charge<T>`][Apply]")), None);
+        assert_eq!(name(&format!("{p}impl#[Tree]")), None);
+        // Members of an impl block keep theirs.
+        assert_eq!(
+            name(&format!("{p}spike/impl#[Tree]Output#")),
+            some("spike.Tree.Output")
+        );
+        // Only rust-analyzer's.
+        assert_eq!(name("other m n v impl#[T]"), some("impl.T"));
+    }
+
+    fn assign(symbols: &[&str]) -> CanonicalNames {
+        let mut names = CanonicalNames::default();
+        for s in symbols {
+            names
+                .insert(&parse(s).unwrap_or_else(|e| panic!("{e}")))
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
+        names
+    }
+
+    #[test]
+    fn a_field_colliding_with_a_method_is_suffixed() {
+        let p = "rust-analyzer cargo demo 0.1.0 ";
+        let field = format!("{p}spike/Server#export_path.");
+        let getter = format!("{p}spike/impl#[Server]export_path().");
+        let plain = format!("{p}spike/Server#root.");
+        let names = assign(&[&field, &getter, &plain]);
+        let assigned = names.assigned();
+        assert_eq!(assigned[&field], "spike.Server.export_path+field");
+        assert_eq!(assigned[&getter], "spike.Server.export_path");
+        assert_eq!(assigned[&plain], "spike.Server.root");
+        assert_eq!(names.collisions(), vec![]);
+        assert_eq!(
+            names
+                .unique()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>(),
+            [
+                "spike.Server.export_path",
+                "spike.Server.export_path+field",
+                "spike.Server.root"
+            ]
+        );
+    }
+
+    #[test]
+    fn fields_alone_are_not_suffixed() {
+        // Two packages' fields collide with each other only: no method, so
+        // no suffix, and the collision is reported.
+        let names = assign(&["s m a v x/Y#f.", "s m b v x/Y#f."]);
+        assert_eq!(names.collisions()[0].name, "x.Y.f");
     }
 
     #[test]
@@ -305,8 +465,8 @@ mod tests {
             }]
         );
         assert_eq!(
-            names.unique().collect::<Vec<_>>(),
-            vec![("x.Z", "s m a v x/Z#")]
+            names.unique(),
+            vec![("x.Z".to_string(), "s m a v x/Z#".to_string())]
         );
     }
 

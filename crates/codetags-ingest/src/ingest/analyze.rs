@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use codetags_names::canonical::{CanonicalNames, Collision};
+use codetags_names::canonical::{CanonicalNames, Collision, is_rust_impl_block};
 use codetags_names::scip::{GlobalSymbol, Symbol, parse};
 
 use super::rules::{self, Dispatch};
@@ -212,6 +212,7 @@ pub(crate) fn analyze(
             }
             if let Some(global) = parsed.get(&occurrence.symbol)?
                 && !rules::is_module(global, kind_of(&occurrence.symbol))
+                && !is_rust_impl_block(global)
             {
                 callers.push(Caller {
                     symbol: occurrence.symbol.as_str(),
@@ -256,20 +257,19 @@ pub(crate) fn analyze(
             continue;
         };
         let symbol = Symbol::Global(global);
-        let name = names
-            .insert(&symbol)
-            .map_err(|error| IngestError::Symbol {
-                symbol: id.clone(),
-                message: error.to_string(),
-            })?
-            .unwrap_or_default();
-        let Symbol::Global(global) = symbol else {
+        let named = names.insert(&symbol).map_err(|error| IngestError::Symbol {
+            symbol: id.clone(),
+            message: error.to_string(),
+        })?;
+        // No canonical name: an impl block, a container rather than a symbol.
+        let (true, Symbol::Global(global)) = (named, symbol) else {
             continue;
         };
         let definition = defined.get(id);
         analysis.symbols.push(SymbolRow {
             id: id.clone(),
-            name,
+            // Assigned below, once every symbol is known (the field policy).
+            name: String::new(),
             kind: rules::kind(&global, definition.and_then(|d| d.kind)),
             file: definition.map(|d| d.file.clone()),
             lines: definition.and_then(|d| d.lines),
@@ -280,6 +280,10 @@ pub(crate) fn analyze(
             package: global.package.name.clone(),
             external: !project_packages.contains(&package_key(&global)),
         });
+    }
+    let mut assigned = names.assigned();
+    for row in &mut analysis.symbols {
+        row.name = assigned.remove(&row.id).unwrap_or_default();
     }
     analysis.collisions = names.collisions();
     Ok(analysis)
@@ -541,6 +545,40 @@ mod m {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn impl_blocks_are_not_symbols_and_getters_keep_the_plain_name() {
+        let mut index = index();
+        let block = format!("{P}m/impl#[S]");
+        let field = format!("{P}m/S#f.");
+        let getter = format!("{P}m/impl#[S]f().");
+        let document = &mut index.documents[0];
+        // The block encloses a reference that lies in no method.
+        document
+            .occurrences
+            .push(definition(&block, range(6, 0, 6, 1), range(6, 0, 7, 0)));
+        document
+            .occurrences
+            .push(definition(&field, range(6, 2, 6, 3), range(6, 2, 6, 3)));
+        document
+            .occurrences
+            .push(definition(&getter, range(6, 4, 6, 5), range(6, 4, 6, 6)));
+        document.symbols.push(info(&block, SymbolKind::Struct));
+        let analysis = analyze(&index, |_| Ok(SOURCE.as_bytes().to_vec())).unwrap();
+        assert!(analysis.symbols.iter().all(|s| s.id != block));
+        let name = |id: &str| {
+            analysis
+                .symbols
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.name.clone())
+        };
+        assert_eq!(name(&field).as_deref(), Some("m.S.f+field"));
+        assert_eq!(name(&getter).as_deref(), Some("m.S.f"));
+        assert!(analysis.collisions.is_empty(), "{:?}", analysis.collisions);
+        // The block is no caller: `helper` on line 7 is still `outer`'s.
+        assert!(analysis.sites.iter().all(|s| s.caller != block));
     }
 
     #[test]

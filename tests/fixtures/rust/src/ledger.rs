@@ -19,3 +19,17 @@ impl Ledger {
         format!("{label}: {latest}")
     }
 }
+
+/// A second inherent impl block. Its `Self` gives the block itself a SCIP
+/// symbol, `ledger/impl#[Ledger]` (V97), which is a container, not a symbol.
+impl Ledger {
+    /// The recorded amounts: a getter named like its field.
+    pub fn entries(&self) -> &[i64] {
+        &self.entries
+    }
+
+    /// A ledger holding `entries`.
+    pub fn with(entries: Vec<i64>) -> Self {
+        Self { entries }
+    }
+}

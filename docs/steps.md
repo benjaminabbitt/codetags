@@ -132,9 +132,10 @@ expected string stands for that one code point.
 ```gherkin
 When the canonical name of the SCIP symbol {string} is taken
 Then the canonical name is {string}
-Then the symbol has no canonical name                # a local or a parameter
+Then the symbol has no canonical name                # a local, a parameter, or a Rust impl block
 Given these SCIP symbols:                            # table with column: symbol
 When their canonical names are assigned
+Then the assigned names are:                         # table with columns: symbol | name; exact set, after the +field policy
 Then the collisions are:                             # table with columns: name | symbol; exact set
 Then there are no collisions
 

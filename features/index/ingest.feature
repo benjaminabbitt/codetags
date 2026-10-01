@@ -42,6 +42,41 @@ Feature: SCIP ingest into a generation
       | pipeline.doubled_all |
     And the ingest reports no canonical-name collisions
 
+  # P1.3c (dogfooding); defaults pending human review.
+  Scenario: Impl blocks are not symbols, and a field named like its getter is suffixed
+    When the fixture "rust" is ingested into a new generation
+    Then the symbols defined in "src/ledger.rs" are exactly:
+      | name                        |
+      | ledger                      |
+      | ledger.Ledger               |
+      | ledger.Ledger.entries+field |
+      | ledger.Ledger.entries       |
+      | ledger.Ledger.record        |
+      | ledger.Ledger.line          |
+      | ledger.Ledger.with          |
+    And the generation's symbols include:
+      | name                        | descriptors                        | kind   | file          | lines | module |
+      | ledger.Ledger.entries+field | ledger/Ledger#entries.             | field  | src/ledger.rs | 6-7   | ledger |
+      | ledger.Ledger.entries       | ledger/impl#[Ledger]entries().     | method | src/ledger.rs | 26-29 | ledger |
+      | charge.Charge.amount        | charge/Charge#amount.              | field  | src/charge.rs | 19-20 | charge |
+    And the symbols defined in "src/charge.rs" are exactly:
+      | name                         |
+      | charge                       |
+      | charge.Apply                 |
+      | charge.Apply.apply           |
+      | charge.Fee                   |
+      | charge.Fee.0                 |
+      | charge.Discount              |
+      | charge.Discount.0            |
+      | charge.Charge                |
+      | charge.Charge.payload        |
+      | charge.Charge.amount         |
+      | charge.Fee.Apply.apply       |
+      | charge.Discount.Apply.apply  |
+      | charge.Charge<T>.Apply.apply |
+      | charge.double                |
+    And the ingest reports no canonical-name collisions
+
   Scenario: Targets without a definition in the project are symbols too
     When the fixture "rust" is ingested into a new generation
     Then the generation's symbols include:
@@ -125,9 +160,9 @@ Feature: SCIP ingest into a generation
     Then the ingest report counts:
       | what                         | count |
       | files                        | 5     |
-      | symbols                      | 41    |
+      | symbols                      | 43    |
       | call sites                   | 22    |
-      | local occurrences            | 67    |
+      | local occurrences            | 71    |
       | operator references          | 18    |
       | references outside a definition | 1  |
 

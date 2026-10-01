@@ -93,6 +93,16 @@ fn collisions(world: &CodetagsWorld) -> Vec<(String, String)> {
     pairs
 }
 
+#[then(expr = "the assigned names are:")]
+fn the_assigned_names_are(world: &mut CodetagsWorld, step: &Step) {
+    let names = world.names.assigned.as_ref().expect("names were assigned");
+    let expected: std::collections::BTreeMap<String, String> = rows(step)
+        .into_iter()
+        .map(|row| (row["symbol"].clone(), row["name"].clone()))
+        .collect();
+    assert_eq!(names.assigned(), expected);
+}
+
 #[then(expr = "the collisions are:")]
 fn the_collisions_are(world: &mut CodetagsWorld, step: &Step) {
     let mut expected: Vec<(String, String)> = rows(step)
