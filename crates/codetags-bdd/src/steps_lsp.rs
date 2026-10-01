@@ -40,7 +40,7 @@ pub(crate) struct LspState {
 
 /// The `codetags-lsp` binary, built beside `codetags` (`just bdd` builds
 /// every workspace binary first).
-fn lsp_binary() -> PathBuf {
+pub(crate) fn lsp_binary() -> PathBuf {
     let codetags = CODETAGS_BIN.get().expect("run() sets the binary path");
     let binary = codetags.with_file_name(format!("codetags-lsp{}", std::env::consts::EXE_SUFFIX));
     assert!(

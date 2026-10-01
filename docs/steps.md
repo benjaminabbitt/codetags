@@ -446,6 +446,69 @@ Then no recording was written                         # the --log file does not 
 `it exits with status {int}` and `stdout matches {string}` (Commands) apply
 to the recorder's run.
 
+## Claude Code's LSP client (M3 stage 0)
+
+`features/lsp/claude-client.feature` (`@claude`) drives Claude Code headless
+(`claude -p --model claude-haiku-4-5-20251001`, PLAN.md D16-D18) with the
+recorder plugin (`tools/claude-plugins/codetags-lsp-recorder`) loaded through
+`--plugin-dir`; docs/lsp-stage0.md explains the flags. Each `Claude Code …`
+step is one user turn of one session (`--input-format stream-json`), and
+records a step mark named in the comment, for `codetags-lsp analyze --marks`.
+A step fails if Claude did not use the tools it names. The session ends,
+and its recording is analyzed, after the scenario's last action.
+
+Within one test run, scenarios whose `Given` and `When` steps (Background
+included) are the same share one live session: the first runs it, the rest
+replay its outcome, or its failure. The runner's `before` hook gives each
+scenario its plan. Tag such features `@serial`, so no two scenarios start a
+session at once.
+
+Recordings are sanitized before they are analyzed: the project directory
+becomes `/project`, and `$HOME` becomes `/home/user`. The `Then` steps read
+the analysis, so they apply alike to a live session and to a recorded one.
+
+```gherkin
+Given a scratch Rust project from the fixture {string} with the LSP recorder plugin
+      # copies tests/fixtures/<name> into the scratch directory as a git repo
+      # (one commit), and gives it its own recorder setup in .codetags/local:
+      # a copy of codetags-lsp and this toolchain's rust-analyzer path
+When Claude Code reads {string} with the Read tool                     # mark: Read
+When Claude Code asks the LSP for the definition of {string} in {string}   # symbol, file; mark: definition
+When Claude Code asks the LSP for references to {string} in {string}       # mark: references
+When Claude Code asks the LSP to hover on {string} in {string}             # mark: hover
+When Claude Code asks the LSP for implementations of {string} in {string}  # mark: implementations
+When Claude Code asks the LSP for the call hierarchy of {string} in {string}
+      # prepareCallHierarchy, incomingCalls, outgoingCalls; mark: call hierarchy
+When Claude Code appends {string} to {string} with the Edit tool, then hovers on {string}   # mark: Edit
+When Claude Code creates {string} holding {string} with the Write tool, then lists its symbols
+      # documentSymbol; mark: Write
+When Claude Code runs {string} through Bash, then hovers on {string} in {string}
+      # the command is allowed exactly (split on `&&`); mark: its program,
+      # plus the subcommand for git ("sed", "git checkout")
+When codetags-lsp analyzes the recorded session {string}
+      # tests/fixtures/lsp/<name>.jsonl, with <name>.marks.jsonl if present
+Then Claude Code loaded the plugin {string}           # from the stream's system/init event
+Then Claude Code did not load the plugin {string}
+Then the recorder wrote {int} recording(s)            # one per language-server process
+Then the client's initialize rootUri is the project root    # "file:///project"
+Then the client's initialize rootUri is null
+Then the client's initialize workspaceFolders are only the project root
+Then the client capability {string} is absent         # dotted path in initialize's capabilities
+Then the client capability {string} is {string}       # expected value as JSON, compared parsed
+Then the client answered {string} with error {int}    # every answer to that server request
+Then the client answered {string} with the result {string}   # every answer, JSON compared parsed
+Then the server sent no {string} request
+Then after the {string} the client's document notifications were {string}
+      # the step mark's didOpen/didChange/didSave/didClose/didChangeWatchedFiles,
+      # in order, as "didOpen src/a.rs, didSave src/a.rs"; "none" if there were none
+Then after the {string} the client's first request was {string}   # "none" if there were none
+Then the client's last request was {string}
+Then the client sent no {string}                      # a notification method, at any time
+Then every didChange the client sent carried the full text   # and it sent at least one
+Then the recording has no end-of-stream or exit record
+      # the recorder was killed before either side closed its stream
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,
@@ -454,7 +517,8 @@ the rule, and the scenario.
 | Tag | Scenario runs only… |
 |---|---|
 | `@linux`, `@macos`, `@windows` | on the named OSes; with no platform tag, on every OS |
-| `@mount`, `@winfsp`, `@providers`, `@privileged`, `@slow` | when the job lists that capability in `CODETAGS_BDD_CAPABILITIES` (comma-separated) |
+| `@mount`, `@winfsp`, `@providers`, `@privileged`, `@slow`, `@claude` | when the job lists that capability in `CODETAGS_BDD_CAPABILITIES` (comma-separated) |
+| `@serial` | (no gate) alone: cucumber runs no other scenario at the same time |
 
 Each scenario that doesn't run is reported on stderr as `bdd: not run here: …`.
 Skipped *steps* (steps with no definition) fail the run.

@@ -9,6 +9,7 @@
 
 mod child;
 pub mod ran;
+mod steps_claude;
 mod steps_cli;
 mod steps_index;
 mod steps_index_go;
@@ -113,6 +114,9 @@ pub struct CodetagsWorld {
     // M3 stage 0 (codetags-lsp): state for features/lsp/.
     /// The fake language server and what the recorder passed through.
     lsp: steps_lsp::LspState,
+    // M3 stage 0 (codetags-lsp): state for features/lsp/claude-client*.
+    /// The scenario's plan, its Claude Code session, and the analysis.
+    claude: steps_claude::ClaudeState,
 }
 
 impl CodetagsWorld {
@@ -145,6 +149,12 @@ pub async fn run(features: impl AsRef<Path>, codetags: PathBuf) {
     let root = features.clone();
     CodetagsWorld::cucumber()
         .fail_on_skipped()
+        // The Claude Code steps share a live session between scenarios with
+        // the same plan, so each needs its scenario's plan up front.
+        .before(|feature, rule, scenario, world| {
+            steps_claude::plan(world, feature, rule, scenario);
+            Box::pin(std::future::ready(()))
+        })
         .after(move |feature, _rule, scenario, _finished, _world| {
             if let Some(record) = &record {
                 let path = feature

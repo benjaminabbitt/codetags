@@ -6,7 +6,14 @@ use cucumber::gherkin::{Feature, Rule, Scenario};
 const PLATFORM_TAGS: [&str; 3] = ["linux", "macos", "windows"];
 
 /// Scenario tags naming a capability the job must opt into.
-const CAPABILITY_TAGS: [&str; 5] = ["mount", "winfsp", "providers", "privileged", "slow"];
+const CAPABILITY_TAGS: [&str; 6] = [
+    "mount",
+    "winfsp",
+    "providers",
+    "privileged",
+    "slow",
+    "claude",
+];
 
 /// Environment variable listing the capabilities a job provides, comma-separated.
 pub const CAPABILITIES_ENV: &str = "CODETAGS_BDD_CAPABILITIES";

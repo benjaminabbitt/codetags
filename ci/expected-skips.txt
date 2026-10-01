@@ -14,3 +14,28 @@
 #       <placeholders>). At least two spaces, then '#' and a reason, are
 #       required. ci/bdd-coverage.py reads these; it fails on an entry that is
 #       malformed, names no scenario, or ran in some job anyway.
+
+# The live Claude Code client feature (M3 stage 0) runs in the claude-client
+# job only when the repository has the ANTHROPIC_API_KEY secret. Once it does,
+# these scenarios run there and these entries fail bdd-coverage: delete them.
+scenario: lsp/claude-client.feature :: Headless Claude Code loads the recorder plugin from --plugin-dir  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: initialize names the project directory as rootUri  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: initialize names the project directory as the only workspace folder  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client does not advertise didChangeWatchedFiles  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client offers only UTF-16 positions  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client does not advertise workDoneProgress  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client says it does not answer workspace/configuration  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client says it does not support workspace folder changes  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client says it sends didSave but not willSave  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: So rust-analyzer sends none of the requests reported as refused  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client refuses workspace/diagnostic/refresh  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The session ends with shutdown, and no exit  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The Read tool neither starts the server nor opens the document  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The server starts, and the document opens, at the first LSP use  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: Each document opens at its first LSP use, once  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: An Edit is followed by didChange and didSave  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: didChange carries the full text  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: A new file from Write opens when the LSP is first used on it  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: A change made by sed through Bash reaches the server not at all  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: A git checkout through Bash reaches the server not at all  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
+scenario: lsp/claude-client.feature :: The client never sends didChangeWatchedFiles or didClose  # needs ANTHROPIC_API_KEY (human: add the secret to enable)
