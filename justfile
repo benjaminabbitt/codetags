@@ -82,9 +82,11 @@ tags-check:
 # Mount features against this OS's live backend (P0b, P5): the bdd suite with
 # the `mount` capability enabled, plus `winfsp` on Windows, whose backend needs
 # WinFsp installed. Needs /dev/fuse and a setuid fusermount3 on Linux;
-# `codetags doctor` explains what is missing.
+# `codetags doctor` explains what is missing. On Windows it also runs S4's
+# name probe (crates/codetags-mount-winfsp/tests/name_probe.rs).
 test-mount:
     CODETAGS_BDD_CAPABILITIES={{ if os() == "windows" { "mount,winfsp" } else { "mount" } }} cargo test --workspace --test bdd
+    if [ "{{ os() }}" = windows ]; then cargo test --workspace --test name_probe -- --ignored --nocapture; fi
 
 # Index features against the fixtures (P1): the bdd suite with the
 # `providers` capability enabled. Run `setup-providers` first.
