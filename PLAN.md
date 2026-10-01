@@ -37,7 +37,12 @@ of tagma's `PLAN.md`:
     - The only TCP listener in the whole system is the macOS NFS loopback backend (§2.8). It binds loopback only.
     - Never run a language server or indexer as root or admin.
     - The privileged helper never executes project code.
-11. **No silent skips.** A scenario or test skipped in CI because a capability is missing must be listed for that job in `ci/expected-skips.txt`. Otherwise the job fails.
+11. **No silent skips.** Every scenario must run in at least one CI job, or be listed in `ci/expected-skips.txt`; this is enforced across jobs:
+    - When env `CODETAGS_BDD_RAN` names a file, the BDD runner appends one line for each scenario it runs: `<feature file path relative to features/> :: <scenario name>`.
+    - Every CI job that runs BDD sets that variable and uploads the file as an artifact.
+    - A final `bdd-coverage` job `needs` every BDD job and runs whether they pass or fail. It downloads every record and runs `ci/bdd-coverage.py`, which parses `features/**/*.feature` for scenario names (a Scenario Outline counts once) and fails, listing every scenario that ran in no job.
+    - The exception is an entry `scenario: <path> :: <name>  # reason` in `ci/expected-skips.txt`. An entry that names no scenario, or names one that ran, also fails the job.
+    - Other CI checks a platform cannot yet perform are listed there as `<platform>: <check>`, e.g. `windows: assert-unprivileged` (V18). The file's header documents the format.
 12. **Licence boundaries** (D9):
     - `just license-check` (cargo-deny) must pass.
     - Dependencies of the BSD-3 crates must be permissively licensed. No GPL, AGPL, LGPL or EUPL.
@@ -435,15 +440,19 @@ codetags/
 ## 5. CI (GitHub Actions)
 
 - **`check`**, a matrix over Linux, macOS (arm64) and Windows with pinned runner labels (V19). Each runs `just setup && just check`. The Windows leg has no WinFsp installed and must show the fallback message and a working Tier 0.
-- **`mount-linux`.**
-  1. Delete the non-setuid `/usr/local/bin/fusermount3` shadow (V12).
-  2. Run `just test-mount` as the runner user, with no sudo.
+- **`mount-linux`** (ubuntu-24.04).
+  1. Delete the non-setuid `/usr/local/bin/fusermount3` shadow, only if it exists and is not setuid (V12). sudo is allowed for this setup.
+  2. Make sure `fuse3` is installed.
+  3. Assert the process is unprivileged, and run `just doctor`.
+  4. Run `just test-mount` as the runner user, with no sudo.
 - **`mount-macos`:** `just test-mount` with no sudo.
 - **`mount-windows-winfsp`:** install WinFsp with `choco install winfsp`, then run `just test-mount` from a de-elevated process (V18).
 - **Windows fallback.** winfsp-rs builds without WinFsp installed, so the Windows `check` leg builds the full binary, WinFsp backend included. That leg runs on a runner without WinFsp, which proves a release binary starts, prints the fallback message, and serves Tier 0.
 - **`providers`**, a matrix over the three OSes: `just setup-providers && just test-providers && just baseline-check`.
 - **`privileged-linux`:** the helper runs under sudo while the daemon runs as the runner user.
 - **Every job that runs product code** has a step asserting the process is unprivileged: euid ≠ 0, or the Windows token is not elevated.
+- **`bdd-coverage`:** needs every job that runs BDD, and checks that every scenario ran somewhere (rule 11).
+- **Triggers:** pushes to `main`, `spike/**` and `agent/**` (so agents can iterate on CI from their own branches), pull requests, and `workflow_dispatch`.
 - **Caching:** `Swatinem/rust-cache`. The bundled DuckDB compile is the slowest step.
 
 ## 6. Phase graph

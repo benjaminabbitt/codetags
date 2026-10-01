@@ -1,1 +1,17 @@
+# Expected skips in CI: no silent skips (PLAN.md §0.11).
+#
+# Blank lines and lines starting with '#' are ignored. Two kinds of entry:
+#
+#   <platform>: <check>
+#       A CI check that a job cannot perform yet on that platform, matched as a
+#       whole line by the script that performs it. Currently only
+#       ci/assert-unprivileged.sh reads these (V18).
+#
+#   scenario: <path> :: <name>  # reason
+#       A scenario that may run in no CI job. <path> is the feature file
+#       relative to features/, with '/' separators; <name> is the scenario
+#       name exactly as written (a Scenario Outline's name with its
+#       <placeholders>). At least two spaces, then '#' and a reason, are
+#       required. ci/bdd-coverage.py reads these; it fails on an entry that is
+#       malformed, names no scenario, or ran in some job anyway.
 windows: assert-unprivileged

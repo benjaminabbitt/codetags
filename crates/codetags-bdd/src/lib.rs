@@ -8,6 +8,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod child;
+pub mod ran;
 mod steps_cli;
 mod steps_model;
 mod steps_mount;
@@ -22,6 +23,7 @@ use std::sync::OnceLock;
 use cucumber::World;
 
 pub use child::maybe_run_child;
+pub use ran::RAN_ENV;
 pub use tags::{CAPABILITIES_ENV, scenario_enabled};
 
 /// The `codetags` binary under test, set once by [`run`].
@@ -91,12 +93,32 @@ impl CodetagsWorld {
 ///
 /// Call [`maybe_run_child`] first: steps that need "another process" re-run
 /// the current executable in child mode.
+///
+/// When [`RAN_ENV`] is set, each scenario that runs is recorded in the file it
+/// names, for CI's cross-job coverage check (PLAN.md §0.11, [`ran`]).
 pub async fn run(features: impl AsRef<Path>, codetags: PathBuf) {
     CODETAGS_BIN
         .set(codetags)
         .expect("run() is called once per process");
+    let features = features.as_ref().to_path_buf();
+    let record = std::env::var_os(RAN_ENV).map(PathBuf::from);
+    let root = features.clone();
     CodetagsWorld::cucumber()
         .fail_on_skipped()
-        .filter_run_and_exit(features.as_ref().to_path_buf(), tags::filter)
+        .after(move |feature, _rule, scenario, _finished, _world| {
+            if let Some(record) = &record {
+                let path = feature
+                    .path
+                    .as_deref()
+                    .expect("cucumber parsed this feature from a file");
+                let line = ran::ran_line(&root, path, &scenario.name).unwrap_or_else(|| {
+                    panic!("{} is not under {}", path.display(), root.display())
+                });
+                ran::append(record, &line)
+                    .unwrap_or_else(|error| panic!("append to {}: {error}", record.display()));
+            }
+            Box::pin(std::future::ready(()))
+        })
+        .filter_run_and_exit(features, tags::filter)
         .await;
 }

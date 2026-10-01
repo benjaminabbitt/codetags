@@ -75,3 +75,10 @@ the rule, and the scenario.
 
 Each scenario that doesn't run is reported on stderr as `bdd: not run here: …`.
 Skipped *steps* (steps with no definition) fail the run.
+
+When `CODETAGS_BDD_RAN` names a file, the runner appends one line for each
+scenario it runs: `<feature file path relative to features/> :: <scenario
+name>`, with `/` separators. CI collects these from every job, and
+`ci/bdd-coverage.py` fails if a scenario ran in no job and is not listed in
+`ci/expected-skips.txt` (PLAN.md §0.11). Scenario names must therefore be
+unique within a feature file.
