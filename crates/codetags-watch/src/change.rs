@@ -86,6 +86,12 @@ pub enum RescanCause {
     WatchError(String),
     /// [`crate::Watcher::rescan`] asked for one.
     Requested,
+    /// The privileged helper lost events: its fanotify queue overflowed, or
+    /// it could not keep up with this client.
+    HelperOverflow,
+    /// The privileged helper's connection ended, so the watcher switched to
+    /// notify. Holds the reason.
+    HelperLost(String),
 }
 
 impl fmt::Display for RescanCause {
@@ -103,6 +109,16 @@ impl fmt::Display for RescanCause {
                  and the difference from the last batch reported"
             ),
             RescanCause::Requested => f.write_str("a rescan was requested"),
+            RescanCause::HelperOverflow => f.write_str(
+                "the privileged helper lost events (its fanotify queue overflowed, or this \
+                 client fell behind); the project was rescanned and the difference from the \
+                 last batch reported",
+            ),
+            RescanCause::HelperLost(reason) => write!(
+                f,
+                "{reason}; the watcher switched to notify, rescanned the project and reported \
+                 the difference from the last batch"
+            ),
         }
     }
 }
