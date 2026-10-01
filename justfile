@@ -55,7 +55,9 @@ duckdb-verify TARGET="":
 # code before CI does. Not part of `check`: CI lints natively on those OSes.
 lint-cross:
     @for target in x86_64-pc-windows-msvc aarch64-apple-darwin; do rustup target list --installed | grep -qx "$target" || { echo "lint-cross: target $target is not installed; add it with: rustup target add $target"; exit 1; }; done
-    cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+    # winfsp-sys runs bindgen over WinFsp's headers, which need windows.h; its
+    # docsrs feature uses the bindings it ships instead (V49).
+    cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc --features winfsp-sys/docsrs -- -D warnings
     cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
 
 # Licence boundaries (PLAN.md §0.12, D9); policy in deny.toml.
