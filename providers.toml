@@ -52,3 +52,17 @@ npm = "@sourcegraph/scip-typescript@0.4.0"
 # github.com/cs-au-dk/jelly, BSD-3-Clause (V83). `npm install -g` of this
 # spec. Its JSON call graph (-j) is unioned with scip-typescript's index.
 npm = "@cs-au-dk/jelly@0.13.0"
+
+[python]
+# The interpreter scip-python runs (it needs `python3` or `python`, and `pip3`
+# or `pip`, on PATH) and the provider's name-site script runs. CI installs
+# this version with actions/setup-python. scip-python 0.6.6 bundles Pyright
+# 1.1.301 and its typeshed, and writes the same index for the fixture under
+# Python 3.11, 3.12 and 3.13 (V91), so `just setup-providers` checks only
+# that an interpreter and pip are present.
+version = "3.12"
+
+[scip-python]
+# MIT; bundles Pyright 1.1.301. 0.6.6 (2025-09-05) is the newest release
+# (V91). `npm install -g` of this spec.
+npm = "@sourcegraph/scip-python@0.6.6"

@@ -12,6 +12,7 @@ use std::time::SystemTime;
 
 use codetags_ingest::ingest;
 use codetags_ingest::provider::go::CallEdge;
+use codetags_ingest::provider::python::UnresolvedReference;
 use codetags_ingest::provider::rust::RustAnalyzer;
 use codetags_ingest::provider::scip::{Document, Occurrence, ScipIndex, SymbolKind};
 use codetags_ingest::provider::ts::jelly::CallGraph;
@@ -47,6 +48,9 @@ pub struct IndexState {
     pub(crate) graph_last: bool,
     /// The project a `Given` step built in the scratch directory.
     pub(crate) project: Option<PathBuf>,
+    /// The unresolved references of the last Python provider run
+    /// (`steps_index_python`).
+    pub(crate) unresolved: Option<Arc<Vec<UnresolvedReference>>>,
 }
 
 impl IndexState {

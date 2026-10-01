@@ -240,6 +240,26 @@ Then the call graph has an edge from {string} to {string} at {string}
 Then line {int} of {string} loads the module {string}        # an import or require edge to that file's module
 ```
 
+The Python provider runs `scip-python` and a Python interpreter (`python3`,
+or `python` on Windows) from `PATH`. A project's root holds a
+`pyproject.toml` naming the project. An unresolved reference is a call or
+attribute name (every `x.name` read, and every bare name that is called or
+is a decorator) at which scip-python wrote no occurrence (`no-occurrence`), or
+only a `local N` the document never defines (`unnamed-local`). Columns count
+UTF-16 code units, as scip-python does.
+
+```gherkin
+When the Python provider indexes the fixture {string}
+When the Python provider indexes a project whose main.py is:   # docstring; a fresh project holding a pyproject.toml and that main.py
+When the Python provider indexes a directory that does not exist
+Then every definition of a method descriptor has an enclosing range
+      # every non-local definition whose symbol ends in `().`; fails if there are none
+Then the symbol {string} has symbol information        # in some document's symbols or the external symbols
+Then the symbol {string} has no symbol information     # nowhere, though the symbol occurs in the index
+Then the unresolved references are:
+      # table with columns: file | line | column | name | called (yes, no) | reason; exactly the unresolved references
+```
+
 ## Watcher and coalescer
 
 A *changes* `{string}` is a whitespace-separated list of `<kind>:<path>`

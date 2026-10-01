@@ -12,6 +12,7 @@ pub mod ran;
 mod steps_cli;
 mod steps_index;
 mod steps_index_go;
+mod steps_index_python;
 mod steps_index_ts;
 mod steps_model;
 mod steps_mount;

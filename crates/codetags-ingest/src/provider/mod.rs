@@ -8,6 +8,7 @@
 //! each carries the provider's stderr.
 
 pub mod go;
+pub mod python;
 pub mod rust;
 pub mod scip;
 pub mod ts;

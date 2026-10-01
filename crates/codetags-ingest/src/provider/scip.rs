@@ -25,6 +25,9 @@ pub struct ScipIndex {
     pub project_root: String,
     /// One per indexed source file.
     pub documents: Vec<Document>,
+    /// Information about symbols the index references but defines in no
+    /// document (scip-python writes the stdlib and dependencies here).
+    pub external_symbols: Vec<SymbolInfo>,
 }
 
 /// One source file in the index.
@@ -223,6 +226,7 @@ pub fn decode_index(bytes: &[u8]) -> Result<ScipIndex, ReadError> {
         tool,
         project_root: raw.metadata.project_root.clone(),
         documents,
+        external_symbols: raw.external_symbols.iter().map(decode_symbol).collect(),
     })
 }
 
@@ -458,6 +462,24 @@ pub(crate) mod tests {
                 "{bad:?}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn external_symbols_are_decoded() {
+        let mut info = scip::types::SymbolInformation::new();
+        info.symbol = "scip-python python python-stdlib 3.11 builtins/print().".into();
+        let mut index = scip::types::Index::new();
+        index.external_symbols.push(info);
+        let decoded = decode_index(&index.write_to_bytes().unwrap()).unwrap();
+        let symbols: Vec<_> = decoded
+            .external_symbols
+            .iter()
+            .map(|info| info.symbol.as_str())
+            .collect();
+        assert_eq!(
+            symbols,
+            ["scip-python python python-stdlib 3.11 builtins/print()."]
+        );
     }
 
     #[test]

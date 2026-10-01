@@ -395,6 +395,7 @@ mod m {
         ScipIndex {
             tool: "rust-analyzer 1.96.1 (x)".into(),
             project_root: "file:///p".into(),
+            external_symbols: vec![],
             documents: vec![Document {
                 relative_path: "src/a.rs".into(),
                 occurrences: vec![
