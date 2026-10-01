@@ -410,8 +410,10 @@ codetags/
     codetags-privhelper/    optional privileged helper (bin)
     codetags/               CLI and codetagsd (bin)
     codetags-bdd/           cucumber runner and step definitions (test-only)
+    codetags-lsp/           LSP session recorder and analyzer (M3 stage 0), later the shim (P3.4); no DuckDB (bin)
     lspx/                   lspmux fork, EUPL-1.2 with its own LICENSE (bin), P3.0. Nothing else depends on it (D9)
   plugins/mermaid/          first declarative plugin (plugin.toml, *.sql, *.j2), shipped as a default
+  tools/claude-plugins/     local Claude Code marketplace, enabled in .claude/settings.json (D18)
   tools/gocallgraph/        Go program: x/tools/go/callgraph (VTA/CHA) → JSONL
   tests/fixtures/<lang>/    small repos with known edges
   tests/baselines/          committed edge counts per fixture
@@ -706,6 +708,7 @@ This no longer gates anything (D2).
 | `eval CONDITION` | Evaluation condition A, B or C |
 | `doctor` | Environment report: mount backend, helper, providers |
 | `dogfood` | Index this repo and refresh its views (M1) |
+| `lsp-record-setup` | M3 stage 0 (D18): installs `codetags-lsp` as the recorder this repo's Claude Code plugin runs rust-analyzer through, and prints the runbook steps (`docs/lsp-stage0.md`) |
 | `dev-tagma PATH` | Local tagma override (a marked block in `.cargo/config.toml`; no PATH removes it) |
 
 ## Appendix B — view tree and tag-write rules

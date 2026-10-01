@@ -181,6 +181,30 @@ dogfood:
     if printf '%s\n' "$out" | grep -q 'canonical-name collisions: [1-9]'; then echo "dogfood: canonical-name collisions (listed above)"; exit 1; fi; \
     echo "dogfood: indexed, no canonical-name collisions"
 
+# M3 stage 0 (PLAN.md D18, docs/lsp-stage0.md): sets up the recorder that this
+# repo's Claude Code plugin (tools/claude-plugins, enabled in .claude/settings.json)
+# runs rust-analyzer through. Copies codetags-lsp to .codetags/local/bin (by
+# rename, so a running recorder keeps its binary), writes the real
+# rust-analyzer's absolute path (this toolchain's) to
+# .codetags/local/rust-analyzer.path, and prints the steps. Unix only: the
+# plugin's wrapper is a sh script.
+lsp-record-setup:
+    @if [ "{{ os() }}" = windows ]; then echo "lsp-record-setup: Unix only (the plugin's wrapper is a sh script)"; exit 1; fi
+    cargo build --workspace --bins --quiet
+    @mkdir -p .codetags/local/bin
+    @cp "${CARGO_TARGET_DIR:-target}/debug/codetags-lsp" .codetags/local/bin/codetags-lsp.new && mv -f .codetags/local/bin/codetags-lsp.new .codetags/local/bin/codetags-lsp
+    @ra="$(rustup which rust-analyzer)" || { echo "lsp-record-setup: no rust-analyzer for this toolchain; add it with: rustup component add rust-analyzer"; exit 1; }; \
+    printf '%s\n' "$ra" > .codetags/local/rust-analyzer.path; \
+    echo "lsp-record-setup: recorder .codetags/local/bin/codetags-lsp"; \
+    echo "lsp-record-setup: real server $ra ($("$ra" --version))"
+    @echo ""
+    @echo "Next (docs/lsp-stage0.md has the full runbook):"
+    @echo "  1. Quit any Claude Code session in this repo. In the main checkout ($PWD), run: claude"
+    @echo "     Accept the trust dialog if asked; /plugin should list codetags-lsp-recorder@codetags-local, enabled."
+    @echo "  2. Do the scripted actions in docs/lsp-stage0.md, section 3, then /exit."
+    @echo "  3. Logs: .codetags/local/lsp-<UTC time>-<pid>.jsonl, one per server process. Summarize with:"
+    @echo "     .codetags/local/bin/codetags-lsp analyze .codetags/local/lsp-<...>.jsonl"
+
 # --- development ---------------------------------------------------------
 
 # Point tagma-core at a local checkout (e.g. ../kvtag) with a marked [patch]
