@@ -136,3 +136,72 @@ Feature: Claude Code's LSP client, observed headless
       And after the "Edit" the client's document notifications were "didChange src/ledger.rs, didSave src/ledger.rs"
       And the language server received no document notifications
       And one language server process served the session
+
+  # M3, before stage 3: is rust-analyzer stale after changes made outside
+  # Claude Code? Direct, it is (V110). Through the shim, the server is told
+  # nothing about any change (D16: the agent's document messages are dropped,
+  # and the client never sends didChangeWatchedFiles), and the shim takes
+  # didChangeWatchedFiles out of initialize, so rust-analyzer watches the
+  # files itself (V122). These rules ask whether that is enough (V126).
+  #
+  # Each rule first searches the workspace until rust-analyzer has indexed
+  # the project, so every change below lands on a running, loaded server.
+  # Each change runs through Bash, then `sleep 2` (the watcher is
+  # asynchronous), then one LSP lookup; the `Then` steps read that lookup's
+  # answer in the shim's log. The markers are constants, and the new file is
+  # made with cp and sed: in dontAsk mode Claude Code 2.1.286 denied a sed
+  # that writes a function, and a `cat > … <<<` with an `echo … >>`, even
+  # with exact allow rules (V127).
+  @linux
+  Rule: Unopened files changed outside Claude Code, through the shim
+
+    Background:
+      Given the scratch project uses the codetags-lsp plugin through lspmux
+      When Claude Code searches the workspace for "Ledger"
+      And Claude Code runs "sed -i 's|^pub struct Ledger|pub const STAGE_SED_MARKER: u32 = 7; &|' src/ledger.rs" through Bash, then searches the workspace for "STAGE_SED_MARKER"
+      And Claude Code runs "git checkout -- src/ledger.rs" through Bash, then searches the workspace for "STAGE_SED_MARKER"
+      And Claude Code runs "cp src/macros.rs src/stage_new.rs && sed -i 's|^macro_rules|pub const STAGE_NEW_MARKER: u32 = 9; &|' src/stage_new.rs && sed -i 's|^pub mod pipeline;|pub mod pipeline; pub mod stage_new;|' src/lib.rs" through Bash, then searches the workspace for "STAGE_NEW_MARKER"
+
+    Scenario: The server has indexed the project before anything changes
+      Then after the "workspace search" a workspace symbol search for "Ledger" found it
+
+    Scenario: A constant sed adds to a file the agent never opened is found
+      Then after the "sed" a workspace symbol search for "STAGE_SED_MARKER" found it
+
+    Scenario: After git checkout restores the file, the constant is gone
+      Then after the "git checkout" a workspace symbol search for "STAGE_SED_MARKER" found nothing
+
+    Scenario: A new file made through Bash, never opened, is indexed
+      Then after the "cp" a workspace symbol search for "STAGE_NEW_MARKER" found it
+
+    Scenario: Nobody told the server about the changes
+      Then after the "sed" the client's document notifications were "none"
+      And after the "git checkout" the client's document notifications were "none"
+      And after the "cp" the client's document notifications were "none"
+      And the client sent no "workspace/didChangeWatchedFiles"
+      And the language server received no document notifications
+
+  # The D16 case: Claude Code has opened the document (a didOpen, which the
+  # shim drops), and believes the server holds its old text.
+  @linux
+  Rule: An opened file changed outside Claude Code, through the shim
+
+    Background:
+      Given the scratch project uses the codetags-lsp plugin through lspmux
+      When Claude Code searches the workspace for "Ledger"
+      And Claude Code reads "src/charge.rs" with the Read tool
+      And Claude Code asks the LSP to hover on "Apply" in "src/charge.rs"
+      And Claude Code runs "sed -i 's|^pub struct Fee|pub const STAGE_OPENED_MARKER: u32 = 8; &|' src/charge.rs" through Bash, then lists the symbols of "src/charge.rs"
+      And Claude Code runs "git checkout -- src/charge.rs" through Bash, then lists the symbols of "src/charge.rs"
+
+    Scenario: The agent opened the document before it changed, and the server got nothing
+      Then a "textDocument/hover" request from the client got a non-empty result
+      And after the "hover" the client's document notifications were "didOpen src/charge.rs"
+      And after the "sed" the client's document notifications were "none"
+      And the language server received no document notifications
+
+    Scenario: The opened document's symbols show the constant sed added
+      Then after the "sed" the symbols of "src/charge.rs" include "STAGE_OPENED_MARKER"
+
+    Scenario: After git checkout restores it, the opened document's symbols do not
+      Then after the "git checkout" the symbols of "src/charge.rs" do not include "STAGE_OPENED_MARKER"

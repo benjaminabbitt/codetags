@@ -1,0 +1,5 @@
+{"step":"workspace search","ts_ms":1790873942903}
+{"step":"Read","ts_ms":1790873952907}
+{"step":"hover","ts_ms":1790873955746}
+{"step":"sed","ts_ms":1790873959163}
+{"step":"git checkout","ts_ms":1790873967797}

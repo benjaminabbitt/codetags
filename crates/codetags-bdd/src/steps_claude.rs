@@ -72,6 +72,8 @@ struct Outcome {
     server_recordings: Vec<String>,
     /// `codetags-lsp analyze --marks` of the first recording.
     analysis: Option<String>,
+    /// The session's step marks, in order (`{"step", "ts_ms"}`).
+    marks: Vec<Value>,
     /// The tail of Claude Code's stderr and stream, for failure messages.
     diagnostics: String,
 }
@@ -123,6 +125,9 @@ pub(crate) struct ClaudeState {
     outcome: Option<Shared>,
     /// The analysis the `Then` steps read: the session's, or a replay's.
     analysis: Option<String>,
+    /// A recorded session's log and step marks, when a scenario analyzes
+    /// one from `tests/fixtures/lsp` instead of running a live session.
+    recorded: Option<(String, Vec<Value>)>,
     /// Through the shim (M3): the plugin to load instead of the recorder,
     /// the environment Claude Code passes it, and the daemon's log.
     shim: Option<ShimSetup>,
@@ -291,6 +296,7 @@ fn start(state: &ClaudeState) -> Live {
     );
     let stderr = project.with_file_name("claude-stderr.txt");
     let mut allowed: Vec<String> = ["Read", "Edit", "Write", "LSP"].map(String::from).to_vec();
+    allowed.push(format!("Bash({SETTLE})"));
     allowed.extend(
         bash_commands(&state.plan)
             .iter()
@@ -436,6 +442,15 @@ impl Live {
                 break;
             }
         }
+        // A denied tool call means the turn did not do what the step says
+        // (a change that never happened would read as a stale server).
+        let denials = &self.events.last().unwrap_or(&Value::Null)["permission_denials"];
+        if denials.as_array().is_some_and(|denied| !denied.is_empty()) {
+            return Err(format!(
+                "{:?}: Claude Code denied {denials} (used {used:?})",
+                action.label
+            ));
+        }
         let missing: Vec<&str> = action
             .tools
             .iter()
@@ -445,8 +460,15 @@ impl Live {
         if missing.is_empty() {
             Ok(())
         } else {
+            // The turn's result lists every tool call the permission rules
+            // denied, in full (the diagnostics' event tails are cut short).
+            let denials = self
+                .events
+                .last()
+                .map(|result| result["permission_denials"].to_string())
+                .unwrap_or_default();
             Err(format!(
-                "{:?}: Claude did not use {missing:?} (used {used:?})",
+                "{:?}: Claude did not use {missing:?} (used {used:?}); permission denials: {denials}",
                 action.label
             ))
         }
@@ -538,6 +560,7 @@ impl Live {
             recordings,
             server_recordings,
             analysis,
+            marks: self.marks.clone(),
             diagnostics: self.diagnostics(),
         })
     }
@@ -807,21 +830,81 @@ fn writes(world: &mut CodetagsWorld, file: String, content: String) {
     );
 }
 
-#[when(expr = "Claude Code runs {string} through Bash, then hovers on {string} in {string}")]
-fn runs_bash(world: &mut CodetagsWorld, command: String, symbol: String, file: String) {
-    // "sed", or "git checkout": the program, and a git subcommand.
+/// The step mark of a Bash command: its program, plus the subcommand for
+/// git ("sed", "git checkout").
+fn bash_label(command: &str) -> String {
     let mut words = command.split_whitespace();
     let program = words.next().unwrap_or("Bash").to_string();
-    let label = match (program.as_str(), words.next()) {
+    match (program.as_str(), words.next()) {
         ("git", Some(subcommand)) => format!("git {subcommand}"),
         _ => program,
-    };
+    }
+}
+
+#[when(expr = "Claude Code runs {string} through Bash, then hovers on {string} in {string}")]
+fn runs_bash(world: &mut CodetagsWorld, command: String, symbol: String, file: String) {
     act(
         world,
         Action {
-            label,
+            label: bash_label(&command),
             prompt: format!(
                 "Run exactly this command with the Bash tool: {command}\nThen use the LSP tool (operation hover) on {symbol} where it is declared in {file}. Quote the hover text."
+            ),
+            tools: &["Bash", "LSP"],
+        },
+    );
+}
+
+/// The Bash command an external-change action runs between the change and
+/// its LSP lookup: a bounded delay, since a server's own file watcher is
+/// asynchronous. Every session allows it.
+const SETTLE: &str = "sleep 2";
+
+/// The LSP tool call that searches the workspace for `query`.
+fn workspace_search(query: &str) -> String {
+    format!(
+        "use the LSP tool with operation workspaceSymbol, filePath src/lib.rs, line 1, character 1, and query \"{query}\". List the symbols it returns by name, or say it returned none."
+    )
+}
+
+#[when(expr = "Claude Code searches the workspace for {string}")]
+fn searches_workspace(world: &mut CodetagsWorld, query: String) {
+    let search = workspace_search(&query);
+    act(
+        world,
+        Action {
+            label: "workspace search".into(),
+            prompt: format!(
+                "First, {search} The language server may still be indexing: while the search returns no symbols, run exactly `{SETTLE}` with the Bash tool and search again, at most 3 more times."
+            ),
+            tools: LSP,
+        },
+    );
+}
+
+#[when(expr = "Claude Code runs {string} through Bash, then searches the workspace for {string}")]
+fn runs_bash_then_searches(world: &mut CodetagsWorld, command: String, query: String) {
+    let search = workspace_search(&query);
+    act(
+        world,
+        Action {
+            label: bash_label(&command),
+            prompt: format!(
+                "Run exactly this command with the Bash tool: {command}\nThen run exactly `{SETTLE}` with the Bash tool, as a command of its own. Then {search}"
+            ),
+            tools: &["Bash", "LSP"],
+        },
+    );
+}
+
+#[when(expr = "Claude Code runs {string} through Bash, then lists the symbols of {string}")]
+fn runs_bash_then_lists_symbols(world: &mut CodetagsWorld, command: String, file: String) {
+    act(
+        world,
+        Action {
+            label: bash_label(&command),
+            prompt: format!(
+                "Run exactly this command with the Bash tool: {command}\nThen run exactly `{SETTLE}` with the Bash tool, as a command of its own. Then use the LSP tool (operation documentSymbol) on {file}, line 1, character 1. List the symbols by name."
             ),
             tools: &["Bash", "LSP"],
         },
@@ -836,6 +919,18 @@ fn analyzes_recorded(world: &mut CodetagsWorld, name: String) {
     let marks = marks.exists().then_some(marks);
     let analysis = run_analyze(&log, marks.as_deref()).unwrap_or_else(|error| panic!("{error}"));
     world.claude.analysis = Some(analysis);
+    let text =
+        std::fs::read_to_string(&log).unwrap_or_else(|e| panic!("read {}: {e}", log.display()));
+    let marks = marks
+        .map(|marks| {
+            std::fs::read_to_string(&marks)
+                .unwrap_or_else(|e| panic!("read {}: {e}", marks.display()))
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    world.claude.recorded = Some((text, marks));
 }
 
 /// The finished live session this scenario ran or replayed.
@@ -1216,9 +1311,196 @@ fn one_server_process(world: &mut CodetagsWorld) {
     );
 }
 
+/// The client's log and the step marks the lookup steps read: a recorded
+/// session's, or the live session's first (client-side) recording.
+fn client_log(world: &CodetagsWorld) -> (String, Vec<Value>) {
+    if let Some((text, marks)) = &world.claude.recorded {
+        return (text.clone(), marks.clone());
+    }
+    let outcome = outcome(world);
+    let recording = outcome
+        .recordings
+        .first()
+        .unwrap_or_else(|| panic!("the session wrote no recording\n{}", outcome.diagnostics));
+    (recording.clone(), outcome.marks.clone())
+}
+
+/// The result of the client's last `method` request that `wanted` accepts
+/// (by its params), sent after the step mark `step` and before the next one.
+fn last_answer(
+    recording: &str,
+    marks: &[Value],
+    step: &str,
+    method: &str,
+    wanted: impl Fn(&Value) -> bool,
+) -> Result<Value, String> {
+    let position = marks
+        .iter()
+        .position(|mark| mark["step"] == step)
+        .ok_or_else(|| format!("no step mark {step:?}"))?;
+    let start = marks[position]["ts_ms"].as_u64().unwrap_or(0);
+    let end = marks
+        .get(position + 1)
+        .and_then(|mark| mark["ts_ms"].as_u64())
+        .unwrap_or(u64::MAX);
+    let records = records(recording);
+    let id = records
+        .iter()
+        .filter(|record| record["from"] == "client" && record["msg"]["method"] == method)
+        .filter(|record| {
+            record["ts_ms"]
+                .as_u64()
+                .is_some_and(|at| (start..end).contains(&at))
+        })
+        .filter(|record| wanted(&record["msg"]["params"]))
+        .filter_map(|record| record["msg"].get("id"))
+        .last()
+        .ok_or_else(|| {
+            format!("the client sent no matching {method} request after the {step:?}")
+        })?;
+    let answer = records
+        .iter()
+        .find(|record| {
+            record["from"] == "server"
+                && record["msg"].get("method").is_none()
+                && record["msg"].get("id") == Some(id)
+        })
+        .ok_or_else(|| format!("{method} request {id} after the {step:?} got no answer"))?;
+    match answer["msg"].get("error") {
+        Some(error) => Err(format!("{method} after the {step:?} failed: {error}")),
+        None => Ok(answer["msg"]["result"].clone()),
+    }
+}
+
+/// Every symbol name in a `workspace/symbol` or `textDocument/documentSymbol`
+/// result, children included.
+fn symbol_names(result: &Value) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut stack: Vec<&Value> = result.as_array().into_iter().flatten().collect();
+    while let Some(symbol) = stack.pop() {
+        if let Some(name) = symbol["name"].as_str() {
+            names.push(name.to_string());
+        }
+        stack.extend(symbol["children"].as_array().into_iter().flatten());
+    }
+    names.sort();
+    names
+}
+
+/// The names the last workspace search for `query` after `step` returned.
+fn searched(world: &CodetagsWorld, step: &str, query: &str) -> Vec<String> {
+    let (recording, marks) = client_log(world);
+    let result = last_answer(&recording, &marks, step, "workspace/symbol", |params| {
+        params["query"] == query
+    })
+    .unwrap_or_else(|error| panic!("{error}"));
+    symbol_names(&result)
+}
+
+#[then(expr = "after the {string} a workspace symbol search for {string} found it")]
+fn search_found(world: &mut CodetagsWorld, mark: String, query: String) {
+    let names = searched(world, &mark, &query);
+    assert!(
+        names.contains(&query),
+        "after the {mark:?}, workspace/symbol {query:?} returned {names:?}"
+    );
+}
+
+#[then(expr = "after the {string} a workspace symbol search for {string} found nothing")]
+fn search_found_nothing(world: &mut CodetagsWorld, mark: String, query: String) {
+    let names = searched(world, &mark, &query);
+    assert!(
+        !names.contains(&query),
+        "after the {mark:?}, workspace/symbol {query:?} returned {names:?}"
+    );
+}
+
+/// The names the last documentSymbol request for `file` after `step` returned.
+fn document_symbols(world: &CodetagsWorld, step: &str, file: &str) -> Vec<String> {
+    let (recording, marks) = client_log(world);
+    let suffix = format!("/{file}");
+    let result = last_answer(
+        &recording,
+        &marks,
+        step,
+        "textDocument/documentSymbol",
+        |params| {
+            params["textDocument"]["uri"]
+                .as_str()
+                .is_some_and(|uri| uri.ends_with(&suffix))
+        },
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    symbol_names(&result)
+}
+
+#[then(expr = "after the {string} the symbols of {string} include {string}")]
+fn symbols_include(world: &mut CodetagsWorld, mark: String, file: String, name: String) {
+    let names = document_symbols(world, &mark, &file);
+    assert!(
+        names.contains(&name),
+        "after the {mark:?}, {file} has the symbols {names:?}"
+    );
+}
+
+#[then(expr = "after the {string} the symbols of {string} do not include {string}")]
+fn symbols_exclude(world: &mut CodetagsWorld, mark: String, file: String, name: String) {
+    let names = document_symbols(world, &mark, &file);
+    assert!(
+        !names.is_empty() && !names.contains(&name),
+        "after the {mark:?}, {file} has the symbols {names:?}"
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bash_commands, slug};
+    use super::{bash_commands, last_answer, slug, symbol_names};
+    use serde_json::json;
+
+    fn log(lines: &[serde_json::Value]) -> String {
+        lines.iter().map(|line| format!("{line}\n")).collect()
+    }
+
+    #[test]
+    fn last_answer_reads_the_marks_window() {
+        let marks = vec![
+            json!({"step": "sed", "ts_ms": 100}),
+            json!({"step": "git checkout", "ts_ms": 200}),
+        ];
+        let request = |id: u32, at: u64, query: &str| json!({"from": "client", "ts_ms": at, "msg": {"id": id, "method": "workspace/symbol", "params": {"query": query}}});
+        let answer = |id: u32, name: &str| json!({"from": "server", "ts_ms": 0, "msg": {"id": id, "result": [{"name": name}]}});
+        let recording = log(&[
+            request(1, 150, "x"),
+            answer(1, "first"),
+            request(2, 160, "x"),
+            answer(2, "second"),
+            request(3, 170, "y"),
+            answer(3, "other query"),
+            request(4, 250, "x"),
+            answer(4, "after the next mark"),
+        ]);
+        let found = |step: &str| {
+            last_answer(&recording, &marks, step, "workspace/symbol", |params| {
+                params["query"] == "x"
+            })
+        };
+        assert_eq!(found("sed"), Ok(json!([{"name": "second"}])));
+        assert_eq!(
+            found("git checkout"),
+            Ok(json!([{"name": "after the next mark"}]))
+        );
+        assert!(found("cat").is_err());
+    }
+
+    #[test]
+    fn symbol_names_include_children() {
+        let result = json!([
+            {"name": "Ledger", "children": [{"name": "record"}]},
+            {"name": "settle"},
+        ]);
+        assert_eq!(symbol_names(&result), vec!["Ledger", "record", "settle"]);
+        assert!(symbol_names(&serde_json::Value::Null).is_empty());
+    }
 
     #[test]
     fn bash_commands_split_on_and() {

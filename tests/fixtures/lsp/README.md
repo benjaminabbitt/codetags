@@ -10,6 +10,7 @@ directory per Claude Code version: `claude-code-<version>/`.
 |---|---|
 | `the-handshake.jsonl` | one hover on `Ledger` in `src/ledger.rs` (the rule "The handshake") |
 | `document-sync.jsonl` | the ten-step stage-0 script (the rule "Document sync") |
+| `an-opened-file-changed-outside-claude-code.jsonl` | through the agent shim and lspmux (the shim's log of the client's side): a document Claude Code opened, changed by `sed` and `git checkout` through Bash, then listed with `documentSymbol` (V126) |
 | `*.marks.jsonl` | one line per scripted step: `{"step": …, "ts_ms": …}`, the Unix time its prompt was sent |
 
 Each `.jsonl` is a `codetags-lsp record` log (format: docs/lsp-stage0.md,

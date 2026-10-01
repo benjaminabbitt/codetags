@@ -535,6 +535,38 @@ Then the language server received no document notifications
 Then one language server process served the session   # one server-side recording
 ```
 
+The staleness rules of `claude-client.feature` (M3, before stage 3; V126)
+change files through Bash and then look them up through the LSP tool. A
+change and its lookup are one turn: the command, then `sleep 2` (allowed in
+every session; a server's own file watcher is asynchronous), then the lookup.
+Any permission denial in a turn fails the action, since a change that never
+ran would read as a stale server. The lookup steps read the client's side of
+the session (the shim's log, or a recorded session's), taking the client's
+last matching request after the named step mark and before the next one.
+
+```gherkin
+When Claude Code searches the workspace for {string}
+      # workspaceSymbol with that query (filePath src/lib.rs); while it finds
+      # nothing (the server may still be indexing), `sleep 2` and search
+      # again, at most 3 more times; mark: workspace search
+When Claude Code runs {string} through Bash, then searches the workspace for {string}
+      # allowed as for the hover form; mark: its program ("sed", "cp", ...)
+When Claude Code runs {string} through Bash, then lists the symbols of {string}
+      # documentSymbol on the file; mark: its program
+Then after the {string} a workspace symbol search for {string} found it
+      # the answer to the last workspace/symbol with that query names a
+      # symbol exactly so
+Then after the {string} a workspace symbol search for {string} found nothing
+      # ... names no symbol so (the request must have been sent and answered)
+Then after the {string} the symbols of {string} include {string}
+      # the last documentSymbol answer for that file, children included
+Then after the {string} the symbols of {string} do not include {string}
+      # ... and it lists at least one symbol
+```
+
+`When codetags-lsp analyzes the recorded session {string}` also gives these
+`Then` steps the recording and its marks.
+
 ## lspmux setup and doctor (M3 stages 1 and 2)
 
 `codetags lsp setup` and the proxy checks of `codetags doctor`

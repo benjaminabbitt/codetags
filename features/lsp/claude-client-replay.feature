@@ -29,3 +29,12 @@ Feature: Recorded Claude Code sessions stay readable
     And after the "sed" the client's document notifications were "none"
     And after the "git checkout" the client's document notifications were "none"
     And the client sent no "workspace/didChangeWatchedFiles"
+
+  Scenario: The recorded shim session saw external changes to a document it had opened
+    When codetags-lsp analyzes the recorded session "claude-code-2.1.286/an-opened-file-changed-outside-claude-code"
+    Then after the "workspace search" a workspace symbol search for "Ledger" found it
+    And after the "hover" the client's document notifications were "didOpen src/charge.rs"
+    And after the "sed" the client's document notifications were "none"
+    And after the "sed" the symbols of "src/charge.rs" include "STAGE_OPENED_MARKER"
+    And after the "git checkout" the symbols of "src/charge.rs" do not include "STAGE_OPENED_MARKER"
+    And the client sent no "workspace/didChangeWatchedFiles"
