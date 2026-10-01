@@ -1,6 +1,6 @@
 [package]
 name = "codetags-model"
-description = "DuckDB schema, migrations, and the immutable generation store (PLAN.md §2.2)."
+description = "DuckDB schema and the immutable generation store (PLAN.md §2.2)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,14 +1,21 @@
-//! DuckDB schema, migrations, and the immutable generation store (PLAN.md §2.2).
+//! DuckDB schema and the immutable generation store (PLAN.md §2.2).
 //!
 //! DuckDB allows one read-write process or many read-only processes on a file,
 //! never both (V7). The generation store is built on that rule: a generation is
 //! written by exactly one process, then only ever opened read-only.
+//!
+//! Generations are immutable and are rebuilt, never migrated: see [`schema`].
+
+mod error;
+pub mod schema;
 
 use std::path::Path;
 
 use duckdb::{AccessMode, Config, Connection};
 
 pub use duckdb::Error;
+pub use error::StoreError;
+pub use schema::SCHEMA_VERSION;
 
 /// Opens the database at `path` for writing, creating it if absent.
 ///
