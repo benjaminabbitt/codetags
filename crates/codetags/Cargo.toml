@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 clap.workspace = true
+codetags-mount-fuse.workspace = true
 
 [dev-dependencies]
 codetags-bdd.workspace = true

@@ -43,6 +43,26 @@ Then it matches exactly {string}             # whitespace-separated ids, compare
 Then the query fails
 ```
 
+## Live mounts
+
+The Linux FUSE spike (P0b S1) is the first backend. The mount steps that
+mount or unmount are defined on Linux only; tag scenarios that use them
+`@linux @mount`. The mount is unmounted, if still mounted, when the scenario
+ends.
+
+```gherkin
+Given the hello filesystem is mounted on an empty directory
+      # P0b S1's read-only, one-file filesystem, mounted unprivileged through
+      # fusermount3 on a new directory in the scenario's scratch directory
+Given a fusermount3 that is not setuid root comes first on PATH
+      # Unix only: puts a fake, non-setuid fusermount3 first on PATH and
+      # unsets FUSERMOUNT_PATH, for processes that `codetags is run with` starts
+When the mount is unmounted
+Then the mount lists exactly {string}                # whitespace-separated names, compared as sorted lists; "" = empty
+Then reading {string} through the mount gives {string}   # file name in the mount; content, trailing whitespace trimmed
+Then the mount directory is empty again
+```
+
 ## Scenario tags
 
 Tags gate where a scenario runs (PLAN.md §3). They are read from the feature,

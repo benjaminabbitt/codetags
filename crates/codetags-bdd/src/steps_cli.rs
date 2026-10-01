@@ -9,10 +9,13 @@ use crate::{CODETAGS_BIN, CodetagsWorld};
 #[when(expr = "codetags is run with {string}")]
 fn codetags_is_run_with(world: &mut CodetagsWorld, args: String) {
     let binary = CODETAGS_BIN.get().expect("run() sets the binary path");
-    let output = Command::new(binary)
-        .args(args.split_whitespace())
-        .output()
-        .expect("spawn codetags");
+    let mut command = Command::new(binary);
+    command.args(args.split_whitespace());
+    for name in &world.env_removed {
+        command.env_remove(name);
+    }
+    command.envs(world.env.iter().map(|(name, value)| (name, value)));
+    let output = command.output().expect("spawn codetags");
     world.last = Some(output.into());
 }
 

@@ -10,5 +10,11 @@ publish.workspace = true
 
 [dependencies]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

@@ -38,6 +38,7 @@ futures = "0.3"
 regex = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
+fuser = "0.18"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -10,9 +10,11 @@
 mod child;
 mod steps_cli;
 mod steps_model;
+mod steps_mount;
 mod steps_query;
 mod tags;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::OnceLock;
@@ -49,8 +51,18 @@ impl From<Output> for CommandOutcome {
 /// Per-scenario state. Cucumber builds a fresh one for every scenario.
 #[derive(Debug, Default, World)]
 pub struct CodetagsWorld {
+    /// A live mount. Declared before `scratch` so it is unmounted before the
+    /// scratch directory holding its mount point is deleted.
+    #[cfg(target_os = "linux")]
+    mount: Option<codetags_mount_fuse::spike::Mounted>,
+    /// Where the live mount is (or was).
+    mount_dir: Option<PathBuf>,
     /// The last process a step ran.
     last: Option<CommandOutcome>,
+    /// Environment overrides for processes the scenario runs.
+    env: Vec<(OsString, OsString)>,
+    /// Environment variables removed for processes the scenario runs.
+    env_removed: Vec<OsString>,
     /// Scratch directory, deleted when the scenario ends.
     scratch: Option<tempfile::TempDir>,
     /// The DuckDB file a `Given` step created.

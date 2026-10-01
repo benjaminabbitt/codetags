@@ -61,10 +61,11 @@ tags-check:
 
 # --- capability-gated suites ---------------------------------------------
 
-# View, plugin, and mount-tagging features against this OS's live backend (P0b, P5).
+# Mount features against this OS's live backend (P0b, P5): the bdd suite with
+# the `mount` capability enabled. Needs /dev/fuse and a setuid fusermount3 on
+# Linux; `codetags doctor` explains what is missing.
 test-mount:
-    @echo "test-mount: not built yet (P0b/P5)"
-    @exit 1
+    CODETAGS_BDD_CAPABILITIES=mount cargo test --workspace --test bdd
 
 # Index features against the fixtures (P1).
 test-providers:
@@ -89,10 +90,12 @@ eval CONDITION:
     @echo "eval {{CONDITION}}: not built yet (P2.7)"
     @exit 1
 
-# Environment report: mount backend, helper, providers (P0b S1).
+# Environment report: mount backend, helper, providers. Builds with
+# --workspace (not `cargo run -p`, which unifies features differently), then
+# runs the binary; it links no DuckDB, so it runs outside cargo.
 doctor:
-    @echo "doctor: not built yet (P0b)"
-    @exit 1
+    cargo build --workspace --bins --quiet
+    "${CARGO_TARGET_DIR:-target}/debug/codetags" doctor
 
 # --- development ---------------------------------------------------------
 
