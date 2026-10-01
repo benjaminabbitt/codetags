@@ -166,7 +166,11 @@ impl Client {
     where
         F: FnMut(Result<Notice, io::Error>) -> bool + Send + 'static,
     {
-        self.stream.set_read_timeout(None)?;
+        // macOS fails this with EINVAL once the helper has hung up. A dead
+        // connection then shows on the first read, which ends the thread
+        // with an error as any lost connection does, so the error is not
+        // fatal here.
+        let _ = self.stream.set_read_timeout(None);
         std::thread::Builder::new()
             .name("codetags-privhelper-client".into())
             .spawn(move || {
