@@ -1,0 +1,9 @@
+{
+  "rust-analyzer scip": {
+    "src/charge.rs": 0,
+    "src/ledger.rs": 5,
+    "src/lib.rs": 6,
+    "src/macros.rs": 0,
+    "src/pipeline.rs": 11
+  }
+}

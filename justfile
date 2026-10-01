@@ -118,10 +118,23 @@ test-mount:
 test-providers:
     CODETAGS_BDD_CAPABILITIES=providers cargo test --workspace --test bdd
 
-# Edge-count regression against tests/baselines (P1.8).
+# The provider fixtures whose edge counts are baselined in tests/baselines:
+# those `codetags index` ingests. Add go, ts and python once ingest supports
+# them (P1.8).
+baseline_fixtures := "rust"
+
+# Edge-count regression against tests/baselines (P1.8): indexes a copy of
+# each fixture in baseline_fixtures and fails, printing a diff, if any
+# per-file edge count differs from its baseline. Run `setup-providers` first.
 baseline-check:
-    @echo "baseline-check: not built yet (P1.8)"
-    @exit 1
+    cargo build --workspace --bins --quiet
+    sh ci/baseline.sh check {{baseline_fixtures}}
+
+# Rewrites tests/baselines from fresh fixture indexes. Deliberate only: after
+# a provider upgrade, review the diff `baseline-check` printed first.
+baseline-update:
+    cargo build --workspace --bins --quiet
+    sh ci/baseline.sh update {{baseline_fixtures}}
 
 # Privileged-helper features (P4.4): the bdd suite with the `privileged`
 # capability enabled. CI only (the privileged-linux job): the scenarios start

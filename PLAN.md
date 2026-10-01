@@ -696,7 +696,8 @@ This no longer gates anything (D2).
 | `tags-check` | Validates this repo's `.codetags/tags` |
 | `test-mount` | View, plugin, and mount-tagging features against this OS's live backend |
 | `test-providers` | Index features against the fixtures |
-| `baseline-check` | Edge-count regression |
+| `baseline-check` | Edge-count regression: indexes each ingested provider fixture and diffs its per-file edge counts against `tests/baselines/` |
+| `baseline-update` | Rewrites `tests/baselines/` from fresh fixture indexes; deliberate, after reviewing the `baseline-check` diff |
 | `test-privileged` | Helper features (CI only) |
 | `bench` | criterion |
 | `eval CONDITION` | Evaluation condition A, B or C |
