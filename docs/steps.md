@@ -332,14 +332,30 @@ Given no privileged helper is listening
       # the watcher steps then try the helper at a socket path in the scratch
       # directory that does not exist
 Given the privileged helper is running
-      # sudo -n codetags-privhelper --socket <new scratch dir>/privhelper.sock;
-      # waits for the socket; the watcher steps then use that socket
+      # sudo -n codetags-privhelper --socket <new scratch dir>/run/privhelper.sock,
+      # where run/ is made by sudo -n install, owned by root, mode 0755 (the
+      # helper refuses a socket directory others can change); waits for the
+      # socket; the watcher steps then use that socket
+Given the privileged helper is running with {string}
+      # the same, with the string's words as extra arguments, e.g. "--queue 100000"
 Given the directory {string} in the project is readable only by root
       # sudo -n: created owned by root, mode 0700
 Given a helper client is subscribed to the project
       # connects to the running helper, subscribes to the project directory,
       # and collects the events it sends
+Given a helper client is subscribed to the project and reads nothing yet
+      # the same, but nothing reads its connection until the next step
+When the helper client starts reading
+      # the client above starts collecting events, as "is subscribed" does
 When a helper client subscribes to {string} in the project   # a fresh client; the reply is kept
+When a helper client subscribes to {string} and then {string} in the project
+      # a fresh client; the first must be accepted, the second's reply is kept
+When the directory {string} is moved to {string} and replaced by one the runner owns
+      # renames the project-relative directory (root's or not), then creates
+      # an empty directory, as the runner, under the old name
+When the privileged helper is started with its socket in a directory the runner owns
+      # sudo -n codetags-privhelper --socket <scratch dir>/privhelper.sock, run
+      # to its exit (at most 10 s); its status and output are kept
 When another process writes the file {string}
       # a child `sh` writes it, as the unprivileged user; its PID is kept
 When root writes the file {string}            # sudo -n sh, writing the project-relative path
@@ -348,6 +364,10 @@ Then within {int} seconds the helper reports a write to {string} by that process
 Then the helper reported nothing under {string}
       # no event so far on a path strictly inside that project-relative directory
 Then the helper refuses the subscription
+Then the helper refuses the subscription, saying {string}   # its reason contains the string
+Then the helper refuses to start, naming that directory
+      # it exited with status 1, its output says "refusing to use <dir>", and
+      # it left no socket there
 ```
 
 ### Ingest into a generation (P1.3)

@@ -44,6 +44,20 @@ fn ask(child: &mut Child, tag: u8, body: &[u8]) -> (u8, Vec<u8>) {
     read_frame(child.stdout.as_mut().unwrap()).unwrap().unwrap()
 }
 
+/// A `P` request: is `path` under `root` visible, where the event came
+/// from the directory `held_by`?
+fn path_request(root: &Path, held_by: &Path, path: &Path) -> Vec<u8> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(held_by).unwrap();
+    let mut body = (root.as_os_str().len() as u32).to_le_bytes().to_vec();
+    body.extend_from_slice(root.as_os_str().as_bytes());
+    body.push(b'D');
+    body.extend_from_slice(&meta.dev().to_le_bytes());
+    body.extend_from_slice(&meta.ino().to_le_bytes());
+    body.extend_from_slice(path.as_os_str().as_bytes());
+    body
+}
+
 #[test]
 fn the_checker_answers_as_the_current_user() {
     let (uid, gid) = ids();
@@ -60,14 +74,16 @@ fn the_checker_answers_as_the_current_user() {
     assert_eq!(tag, b'N');
     assert!(!reason.is_empty());
 
-    let mut path = (canonical.as_os_str().len() as u32).to_le_bytes().to_vec();
-    path.extend_from_slice(canonical.as_os_str().as_bytes());
-    path.extend_from_slice(canonical.join("a.rs").as_os_str().as_bytes());
-    assert_eq!(ask(&mut child, b'P', &path).0, b'Y');
-    let mut outside = (canonical.as_os_str().len() as u32).to_le_bytes().to_vec();
-    outside.extend_from_slice(canonical.as_os_str().as_bytes());
-    outside.extend_from_slice(b"/etc/passwd");
+    let held_by_root = path_request(&canonical, &canonical, &canonical.join("a.rs"));
+    assert_eq!(ask(&mut child, b'P', &held_by_root).0, b'Y');
+    let outside = path_request(&canonical, Path::new("/etc"), Path::new("/etc/passwd"));
     assert_eq!(ask(&mut child, b'P', &outside).0, b'N');
+    // Threat model F1: an event recorded as coming from one directory is
+    // refused when its path leads to another, though both are listable.
+    let other = canonical.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let elsewhere = path_request(&canonical, &other, &canonical.join("a.rs"));
+    assert_eq!(ask(&mut child, b'P', &elsewhere).0, b'N');
 
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
@@ -95,11 +111,19 @@ struct Helper {
 
 impl Helper {
     fn start() -> Self {
+        Self::start_with(&[])
+    }
+
+    /// Starts the helper with `args` after `--socket`. Unprivileged, its
+    /// socket's directory may be owned by this user (not group- or
+    /// other-writable), since no one else can change it.
+    fn start_with(args: &[&str]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("run/privhelper.sock");
         let child = Command::new(HELPER)
             .arg("--socket")
             .arg(&socket)
+            .args(args)
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
@@ -191,7 +215,10 @@ fn the_helper_exits_when_its_socket_is_removed() {
 
 #[test]
 fn a_non_socket_file_is_never_replaced() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
+    // A directory the helper accepts, whatever this process's umask.
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     let path = dir.path().join("privhelper.sock");
     std::fs::write(&path, "precious").unwrap();
     let out = Command::new(HELPER)
@@ -202,4 +229,163 @@ fn a_non_socket_file_is_never_replaced() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("not a socket"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "precious");
+}
+
+/// Runs the helper to completion, expecting it to refuse to start.
+fn refused_start(socket: &Path, args: &[&str]) -> (Option<i32>, String) {
+    let out = Command::new(HELPER)
+        .arg("--socket")
+        .arg(socket)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Threat model F2: the socket is created with its mode, by a umask around
+/// `bind`, not by a later chmod of its path.
+#[test]
+fn the_socket_is_created_with_mode_0666() {
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+    let helper = Helper::start();
+    let meta = std::fs::symlink_metadata(&helper.socket).unwrap();
+    assert!(meta.file_type().is_socket());
+    assert_eq!(meta.permissions().mode() & 0o777, 0o666);
+}
+
+#[test]
+fn a_stale_socket_is_replaced_but_a_live_one_is_not() {
+    let mut first = Helper::start();
+    let (code, stderr) = refused_start(&first.socket, &[]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("another helper is listening"), "{stderr}");
+    // Killed, the first helper leaves its socket behind, stale.
+    first.child.kill().unwrap();
+    first.child.wait().unwrap();
+    assert!(first.socket.exists());
+    let mut second = Command::new(HELPER)
+        .arg("--socket")
+        .arg(&first.socket)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Client::connect(&first.socket).is_err() {
+        assert!(
+            second.try_wait().unwrap().is_none(),
+            "the second helper exited"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "the second helper never answered"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = second.kill();
+    let _ = second.wait();
+}
+
+/// Threat model F2: a directory anyone else can write is refused, and the
+/// error names it.
+#[test]
+fn a_socket_directory_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    for mode in [0o777, 0o1777, 0o770] {
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        let (code, stderr) = refused_start(&dir.path().join("privhelper.sock"), &[]);
+        assert_eq!(code, Some(1), "{stderr}");
+        assert!(stderr.contains("writable by group or other"), "{stderr}");
+        assert!(
+            stderr.contains(&dir.path().display().to_string()),
+            "{stderr}"
+        );
+        assert!(!dir.path().join("privhelper.sock").exists());
+    }
+}
+
+/// Threat model F2: the socket's directory may not be a symlink, even to a
+/// directory that would itself be accepted.
+#[test]
+fn a_symlinked_socket_directory_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let (code, stderr) = refused_start(&link.join("privhelper.sock"), &[]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("symbolic link"), "{stderr}");
+    assert!(!real.join("privhelper.sock").exists());
+}
+
+/// Connects until `ok` holds for the result, for up to 10 s: a connection's
+/// place is freed when the helper notices it hung up.
+fn connect_until(socket: &Path, ok: impl Fn(&Result<Client, HelperError>) -> bool) -> Client {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = Client::connect(socket);
+        if ok(&result) {
+            return result.unwrap();
+        }
+        assert!(Instant::now() < deadline, "still {:?}", result.err());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The reason a connection was turned away.
+fn rejected(socket: &Path) -> String {
+    match Client::connect(socket) {
+        Err(HelperError::Handshake(reason)) => reason,
+        Err(other) => panic!("expected a rejection, got {other}"),
+        Ok(_) => panic!("expected a rejection, got a connection"),
+    }
+}
+
+#[test]
+fn connections_over_the_total_limit_are_rejected() {
+    let helper = Helper::start_with(&["--max-connections", "2"]);
+    let first = Client::connect(&helper.socket).unwrap();
+    let _second = Client::connect(&helper.socket).unwrap();
+    let reason = rejected(&helper.socket);
+    assert!(reason.contains("maximum of 2 connections"), "{reason}");
+    drop(first);
+    connect_until(&helper.socket, Result::is_ok);
+}
+
+#[test]
+fn connections_over_the_per_uid_limit_are_rejected() {
+    let helper = Helper::start_with(&["--max-connections-per-uid", "1"]);
+    let first = Client::connect(&helper.socket).unwrap();
+    let reason = rejected(&helper.socket);
+    let (uid, _) = ids();
+    assert!(reason.contains(&format!("uid {uid}")), "{reason}");
+    drop(first);
+    connect_until(&helper.socket, Result::is_ok);
+}
+
+#[test]
+fn checkers_over_the_limit_are_rejected() {
+    let helper = Helper::start_with(&["--max-checkers", "1"]);
+    let first = Client::connect(&helper.socket).unwrap();
+    let reason = rejected(&helper.socket);
+    assert!(reason.contains("maximum of 1 checkers"), "{reason}");
+    drop(first);
+    connect_until(&helper.socket, Result::is_ok);
+}
+
+#[test]
+fn limits_must_be_positive_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("privhelper.sock");
+    for args in [["--queue", "0"], ["--max-checkers", "lots"]] {
+        let (code, stderr) = refused_start(&socket, &args);
+        assert_eq!(code, Some(2), "{stderr}");
+        assert!(stderr.contains("positive number"), "{stderr}");
+    }
+    let (code, stderr) = refused_start(&socket, &["--max-subscriptions"]);
+    assert_eq!(code, Some(2), "{stderr}");
 }

@@ -39,30 +39,54 @@ mod unix {
     /// it is removed.
     const STARTUP: Duration = Duration::from_secs(10);
 
+    /// The helper binary, beside the `codetags` binary.
+    fn helper_binary() -> PathBuf {
+        let binary = crate::CODETAGS_BIN
+            .get()
+            .expect("run() set the codetags binary")
+            .with_file_name("codetags-privhelper");
+        assert!(
+            binary.exists(),
+            "{} is not built: `just test-privileged` builds it with \
+             cargo build --workspace --bins",
+            binary.display()
+        );
+        binary
+    }
+
     /// A helper started with `sudo -n`. Dropping it removes its socket, which
     /// makes it exit; the unprivileged test cannot signal a root process.
+    ///
+    /// Its socket is in a directory root creates, owned by root and mode
+    /// 0755, inside a scratch directory: the helper refuses a socket
+    /// directory anyone but root can write (threat model F2).
     #[derive(Debug)]
     struct HelperProcess {
         child: Child,
         socket: PathBuf,
         log: PathBuf,
+        /// The root-owned directory holding the socket.
+        run: PathBuf,
         _dir: tempfile::TempDir,
     }
 
     impl HelperProcess {
-        fn start() -> Self {
-            let binary = crate::CODETAGS_BIN
-                .get()
-                .expect("run() set the codetags binary")
-                .with_file_name("codetags-privhelper");
-            assert!(
-                binary.exists(),
-                "{} is not built: `just test-privileged` builds it with \
-                 cargo build --workspace --bins",
-                binary.display()
-            );
+        fn start(args: &[&str]) -> Self {
+            let binary = helper_binary();
             let dir = tempfile::tempdir().expect("create the helper's directory");
-            let socket = dir.path().join("privhelper.sock");
+            let run = dir.path().join("run");
+            sudo(&[
+                "install".as_ref(),
+                "-d".as_ref(),
+                "-m".as_ref(),
+                "755".as_ref(),
+                "-o".as_ref(),
+                "0".as_ref(),
+                "-g".as_ref(),
+                "0".as_ref(),
+                run.as_os_str(),
+            ]);
+            let socket = run.join("privhelper.sock");
             let log = dir.path().join("privhelper.log");
             let out = File::create(&log).expect("create the helper's log");
             let err = out.try_clone().expect("clone the log");
@@ -71,6 +95,7 @@ mod unix {
                 .arg(&binary)
                 .arg("--socket")
                 .arg(&socket)
+                .args(args)
                 .stdin(Stdio::null())
                 .stdout(out)
                 .stderr(err)
@@ -80,6 +105,7 @@ mod unix {
                 child,
                 socket,
                 log,
+                run,
                 _dir: dir,
             };
             let deadline = Instant::now() + STARTUP;
@@ -107,20 +133,32 @@ mod unix {
 
     impl Drop for HelperProcess {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.socket);
+            // Only root can remove the socket from root's directory.
+            let _ = Command::new("sudo")
+                .args(["-n", "rm", "-f", "--"])
+                .arg(&self.socket)
+                .status();
             let deadline = Instant::now() + STARTUP;
+            let mut exited = false;
             while Instant::now() < deadline {
                 if let Ok(Some(_)) = self.child.try_wait() {
-                    return;
+                    exited = true;
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            eprintln!(
-                "bdd: the helper outlived its socket; its log:\n{}",
-                self.log()
-            );
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            if !exited {
+                eprintln!(
+                    "bdd: the helper outlived its socket; its log:\n{}",
+                    self.log()
+                );
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+            let _ = Command::new("sudo")
+                .args(["-n", "rm", "-rf", "--"])
+                .arg(&self.run)
+                .status();
         }
     }
 
@@ -140,6 +178,11 @@ mod unix {
         writer: Option<u32>,
         /// The outcome of the last "subscribes to".
         subscription: Option<Result<PathBuf, String>>,
+        /// A subscribed client that is not reading yet.
+        idle: Option<Client>,
+        /// A helper that was expected to refuse to start: the directory its
+        /// socket was in, its exit status and its output.
+        refused_start: Option<(PathBuf, Option<i32>, String)>,
     }
 
     impl HelperState {
@@ -199,9 +242,66 @@ mod unix {
 
     #[given("the privileged helper is running")]
     fn helper_running(world: &mut CodetagsWorld) {
-        let process = HelperProcess::start();
+        let process = HelperProcess::start(&[]);
         world.watch.helper = HelperSocket::At(process.socket.clone());
         world.privhelper.process = Some(process);
+    }
+
+    #[given(expr = "the privileged helper is running with {string}")]
+    fn helper_running_with(world: &mut CodetagsWorld, args: String) {
+        let args: Vec<&str> = args.split_whitespace().collect();
+        let process = HelperProcess::start(&args);
+        world.watch.helper = HelperSocket::At(process.socket.clone());
+        world.privhelper.process = Some(process);
+    }
+
+    #[when("the privileged helper is started with its socket in a directory the runner owns")]
+    fn helper_started_in_runner_dir(world: &mut CodetagsWorld) {
+        let dir = world.scratch().to_path_buf();
+        let socket = dir.join("privhelper.sock");
+        let mut child = Command::new("sudo")
+            .arg("-n")
+            .arg(helper_binary())
+            .arg("--socket")
+            .arg(&socket)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run sudo");
+        let deadline = Instant::now() + STARTUP;
+        while child.try_wait().ok().flatten().is_none() {
+            if Instant::now() >= deadline {
+                // It started after all. The runner may remove a socket in
+                // its own directory, which stops the helper.
+                let _ = std::fs::remove_file(&socket);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let out = child.wait_with_output().expect("wait for the helper");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        world.privhelper.refused_start = Some((dir, out.status.code(), text));
+    }
+
+    #[then("the helper refuses to start, naming that directory")]
+    fn refuses_to_start(world: &mut CodetagsWorld) {
+        let (dir, code, text) = world
+            .privhelper
+            .refused_start
+            .as_ref()
+            .expect("an earlier step started the helper");
+        assert_eq!(*code, Some(1), "the helper did not refuse: {text}");
+        assert!(
+            text.contains(&format!("refusing to use {}", dir.display())),
+            "the refusal does not name {}: {text}",
+            dir.display()
+        );
+        assert!(!dir.join("privhelper.sock").exists());
     }
 
     #[given(expr = "the directory {string} in the project is readable only by root")]
@@ -221,8 +321,8 @@ mod unix {
         world.watch.root_owned.0.push(path);
     }
 
-    #[given("a helper client is subscribed to the project")]
-    fn client_subscribed(world: &mut CodetagsWorld) {
+    /// Connects a client and subscribes it to the project.
+    fn subscribe_to_project(world: &mut CodetagsWorld) -> Client {
         let root = canonical(world.watch.project());
         let mut client = Client::connect(world.privhelper.socket())
             .unwrap_or_else(|error| panic!("connect to the helper: {error}"));
@@ -230,13 +330,74 @@ mod unix {
             .subscribe(&root)
             .unwrap_or_else(|error| panic!("subscribe to {}: {error}", root.display()));
         assert_eq!(accepted, root);
+        world.privhelper.root = Some(root);
+        client
+    }
+
+    /// Collects `client`'s notices from now on.
+    fn start_reading(world: &mut CodetagsWorld, client: Client) {
         let shutdown = client.shutdown_handle().expect("clone the connection");
         let (tx, rx) = mpsc::channel();
         client
             .forward(move |notice| tx.send(notice.map_err(|e| e.to_string())).is_ok())
             .expect("start the client's thread");
         world.privhelper.notices = Some((rx, shutdown));
-        world.privhelper.root = Some(root);
+    }
+
+    #[given("a helper client is subscribed to the project")]
+    fn client_subscribed(world: &mut CodetagsWorld) {
+        let client = subscribe_to_project(world);
+        start_reading(world, client);
+    }
+
+    #[given("a helper client is subscribed to the project and reads nothing yet")]
+    fn client_subscribed_idle(world: &mut CodetagsWorld) {
+        let client = subscribe_to_project(world);
+        world.privhelper.idle = Some(client);
+    }
+
+    #[when("the helper client starts reading")]
+    fn client_starts_reading(world: &mut CodetagsWorld) {
+        let client = world
+            .privhelper
+            .idle
+            .take()
+            .expect("an earlier step subscribed a client that reads nothing yet");
+        start_reading(world, client);
+    }
+
+    #[when(expr = "a helper client subscribes to {string} and then {string} in the project")]
+    fn client_subscribes_twice(world: &mut CodetagsWorld, first: String, second: String) {
+        let project = world.watch.project().to_path_buf();
+        let mut client = Client::connect(world.privhelper.socket())
+            .unwrap_or_else(|error| panic!("connect to the helper: {error}"));
+        let first = project.join(first);
+        client
+            .subscribe(&first)
+            .unwrap_or_else(|error| panic!("subscribe to {}: {error}", first.display()));
+        let second = project.join(second);
+        world.privhelper.subscription = Some(match client.subscribe(&second) {
+            Ok(root) => Ok(root),
+            Err(HelperError::Refused { reason, .. }) => Err(reason),
+            Err(error) => panic!("subscribe to {}: {error}", second.display()),
+        });
+    }
+
+    #[when(
+        expr = "the directory {string} is moved to {string} and replaced by one the runner owns"
+    )]
+    fn directory_swapped(world: &mut CodetagsWorld, dir: String, to: String) {
+        let (from, to) = (
+            world.watch.project().join(dir),
+            world.watch.project().join(to),
+        );
+        // The runner owns the project, so it may rename an entry in it,
+        // even a directory root owns.
+        std::fs::rename(&from, &to)
+            .unwrap_or_else(|error| panic!("rename {}: {error}", from.display()));
+        std::fs::create_dir(&from)
+            .unwrap_or_else(|error| panic!("create {}: {error}", from.display()));
+        world.watch.root_owned.0.push(to);
     }
 
     #[when(expr = "a helper client subscribes to {string} in the project")]
@@ -315,6 +476,19 @@ mod unix {
             .filter(|event| event.path.starts_with(&dir) && event.path != dir)
             .collect();
         assert!(leaked.is_empty(), "the helper leaked {leaked:#?}");
+    }
+
+    #[then(expr = "the helper refuses the subscription, saying {string}")]
+    fn refuses_saying(world: &mut CodetagsWorld, text: String) {
+        match world
+            .privhelper
+            .subscription
+            .as_ref()
+            .expect("an earlier step subscribed")
+        {
+            Err(reason) => assert!(reason.contains(&text), "the reason was {reason:?}"),
+            Ok(root) => panic!("the helper accepted {}", root.display()),
+        }
     }
 
     #[then("the helper refuses the subscription")]

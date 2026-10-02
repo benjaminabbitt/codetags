@@ -9,8 +9,10 @@ Feature: The privileged helper accelerates the watcher, and is never required
 
   The helper filters events per client. A client, identified by SO_PEERCRED,
   receives an event only if it could list the directory holding the path,
-  checked as that client's user, never as root. So a root helper never shows
-  one user another user's file names.
+  checked as that client's user, never as root, and only if that directory is
+  still the one the event came from. So a root helper never shows one user
+  another user's file names. Each client's share of the helper (connections,
+  checker processes, subscriptions, queued events) is capped.
 
   The privileged scenarios start the helper with `sudo -n` (CI only, the
   privileged-linux job), while the scenarios themselves, and the watcher,
@@ -67,3 +69,39 @@ Feature: The privileged helper accelerates the watcher, and is never required
     And the directory "secret" in the project is readable only by root
     When a helper client subscribes to "secret" in the project
     Then the helper refuses the subscription
+
+  @linux @privileged
+  Scenario: A path renamed after its event is checked against the directory the event came from
+    The race of threat model F1, made deterministic. The client reads nothing
+    while the project's files are rewritten, so its connection fills up and
+    the helper's event thread waits with the rest queued. Root then writes in
+    its own directory, and the runner renames that directory away and makes
+    one it can list under the same name. The helper resolved the event's
+    path before the rename, and checks it after. The check must find that
+    the path now leads to another directory, and withhold the name.
+    Given the privileged helper is running with "--queue 100000"
+    And a project directory holding 2000 files in "flood"
+    And the directory "secret" in the project is readable only by root
+    And a helper client is subscribed to the project and reads nothing yet
+    When a formatter rewrites every file in "flood"
+    And root writes the file "secret/hidden.rs"
+    And the directory "secret" is moved to "secret.old" and replaced by one the runner owns
+    And another process writes the file "flood/f001.rs"
+    And the helper client starts reading
+    Then within 30 seconds the helper reports a write to "flood/f001.rs" by that process
+    And the helper reported nothing under "secret"
+
+  @linux @privileged
+  Scenario: The helper refuses to put its socket in a directory another user can change
+    Root creates, replaces and binds the socket, so its directory must be one
+    only root can change (threat model F2). The runner's scratch directory is
+    not.
+    When the privileged helper is started with its socket in a directory the runner owns
+    Then the helper refuses to start, naming that directory
+
+  @linux @privileged
+  Scenario: The helper refuses a subscription past its per-connection limit
+    Given the privileged helper is running with "--max-subscriptions 1"
+    And a project directory holding the files "src/lib.rs tests/a.rs"
+    When a helper client subscribes to "src" and then "tests" in the project
+    Then the helper refuses the subscription, saying "maximum of 1 subscriptions"

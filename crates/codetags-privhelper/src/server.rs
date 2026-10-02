@@ -15,12 +15,16 @@
 //!
 //! Lock order: a client's writer, then the registry. The fanotify thread
 //! takes only the registry; the checker lock is never held with another.
+//!
+//! Every resource a client can make the helper spend is capped
+//! ([`crate::limits`]). The accept thread refuses a connection over a cap
+//! itself, without starting a thread for it.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Write};
 use std::os::fd::AsFd;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
@@ -29,12 +33,14 @@ use std::time::Duration;
 
 use codetags_watch::privhelper::proto::{HelperEvent, Reply, Request, VERSION, read_frame};
 use nix::libc;
-use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+use nix::sys::socket::{UnixCredentials, getsockopt, sockopt::PeerCredentials};
 
-use crate::checker::{Checker, Identity};
+use crate::checker::{Binding, Checker, DirId, Identity};
 use crate::fanotify::{self, Group};
 use crate::handle;
+use crate::limits::{Admission, Gate, Limits, Subscriptions, Ticket};
 use crate::parse::{self, INFO_DFID, INFO_DFID_NAME, INFO_FID, RawEvent};
+use crate::socket;
 
 /// The backend name sent in the handshake.
 const BACKEND: &str = "fanotify";
@@ -44,8 +50,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The watcher reads its socket on a thread of its own, so only a stuck
 /// client takes this long.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Events queued per client before it counts as lagging.
-const QUEUE: usize = 16 * 1024;
+/// How long the accept thread may block writing a refusal.
+const REFUSAL_TIMEOUT: Duration = Duration::from_millis(100);
 /// How often the watchdog checks the socket.
 const WATCHDOG: Duration = Duration::from_millis(250);
 /// The size of one fanotify read.
@@ -57,7 +63,7 @@ pub fn log(message: impl std::fmt::Display) {
 }
 
 /// Locks `mutex`, recovering it if a thread panicked while holding it.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -65,7 +71,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// What the fanotify thread hands a client's event thread.
 enum Delivery {
-    Event { root: PathBuf, event: HelperEvent },
+    /// An event under `root`. The client may see it only if its path still
+    /// leads to what `binding` names.
+    Event {
+        root: PathBuf,
+        event: HelperEvent,
+        binding: Binding,
+    },
     Overflow,
 }
 
@@ -78,6 +90,9 @@ struct Subscriber {
 }
 
 impl Subscriber {
+    /// Queues `delivery` without blocking. A full queue drops it and marks
+    /// the client as lagging, so it is sent an overflow: each client's
+    /// memory stays bounded by its queue.
     fn deliver(&self, delivery: Delivery) {
         if let Err(TrySendError::Full(_)) = self.queue.try_send(delivery) {
             self.lagged.store(true, Ordering::Relaxed);
@@ -183,7 +198,7 @@ impl Registry {
         };
         let pid = u32::try_from(event.pid).ok().filter(|&pid| pid != 0);
         for root in &self.roots {
-            let Some(path) = resolve(root, event) else {
+            let Some((path, binding)) = resolve(root, event) else {
                 continue;
             };
             if !path.starts_with(&root.path) {
@@ -197,6 +212,7 @@ impl Registry {
                         kind,
                         pid,
                     },
+                    binding,
                 });
             }
         }
@@ -205,7 +221,13 @@ impl Registry {
 
 /// The path an event names, as seen through `root`'s mount: the directory
 /// and entry name if reported, else the directory, else the object itself.
-fn resolve(root: &Root, event: &RawEvent) -> Option<PathBuf> {
+///
+/// With it comes what the path must still lead to when the client's
+/// checker sees it (threat model F1). It is taken from the descriptor the
+/// handle opened, never from the path: for an entry, the directory holding
+/// it; for an object reported as itself, the object. An event on the root
+/// itself is bound to the root's open descriptor.
+fn resolve(root: &Root, event: &RawEvent) -> Option<(PathBuf, Binding)> {
     [INFO_DFID_NAME, INFO_DFID, INFO_FID]
         .into_iter()
         .flat_map(|info_type| event.fids.iter().filter(move |f| f.info_type == info_type))
@@ -213,17 +235,25 @@ fn resolve(root: &Root, event: &RawEvent) -> Option<PathBuf> {
         .find_map(|fid| {
             let fd = handle::open(root.mount.as_fd(), fid.handle_type, &fid.handle).ok()?;
             let base = handle::path_of(&fd)?;
-            match &fid.name {
-                Some(name) if name.as_os_str() == "." => Some(base),
+            let (path, entry) = match &fid.name {
+                Some(name) if name.as_os_str() == "." => (base, false),
                 Some(name) => {
                     let mut parts = Path::new(name).components();
                     match (parts.next(), parts.next()) {
-                        (Some(Component::Normal(_)), None) => Some(base.join(name)),
-                        _ => None,
+                        (Some(Component::Normal(_)), None) => (base.join(name), true),
+                        _ => return None,
                     }
                 }
-                None => Some(base),
-            }
+                None => (base, false),
+            };
+            let binding = if path == root.path {
+                Binding::Dir(DirId::of(&root.mount).ok()?)
+            } else if entry {
+                Binding::Dir(DirId::of(&fd).ok()?)
+            } else {
+                Binding::Entry(DirId::of(&fd).ok()?)
+            };
+            Some((path, binding))
         })
 }
 
@@ -234,6 +264,10 @@ struct Shared {
     /// Where checkers are started from.
     exe: PathBuf,
     next_client: AtomicU64,
+    /// The caps.
+    limits: Limits,
+    /// Places for running checkers.
+    checkers: Arc<Gate>,
 }
 
 /// The helper's settings.
@@ -241,6 +275,8 @@ struct Shared {
 pub struct Options {
     /// The socket to listen on.
     pub socket: PathBuf,
+    /// The resource limits.
+    pub limits: Limits,
 }
 
 /// Runs the helper until its socket goes away or the process is killed.
@@ -257,13 +293,27 @@ pub fn serve(options: &Options) -> Result<(), String> {
     } else {
         "fanotify group with FAN_REPORT_FID only (Linux before 5.9): events name directories"
     });
-    let (listener, inode) = bind(&options.socket)?;
+    // The process still has one thread here, as socket::bind needs.
+    let (listener, inode) = socket::bind(&options.socket)?;
     log(format!("listening on {}", options.socket.display()));
+    let limits = options.limits;
+    log(format!(
+        "limits: {} connections ({} per uid), {} checkers, {} subscriptions and {} queued \
+         events per connection",
+        limits.connections,
+        limits.connections_per_uid,
+        limits.checkers,
+        limits.subscriptions,
+        limits.queue
+    ));
+    let admission = Admission::new(limits.connections, limits.connections_per_uid);
     let shared = Arc::new(Shared {
         group,
         registry: Mutex::new(Registry::default()),
         exe: PathBuf::from("/proc/self/exe"),
         next_client: AtomicU64::new(1),
+        limits,
+        checkers: Gate::new(limits.checkers),
     });
 
     let socket = options.socket.clone();
@@ -278,58 +328,51 @@ pub fn serve(options: &Options) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let shared = Arc::clone(&shared);
-                let spawned = std::thread::Builder::new()
-                    .name("client".into())
-                    .spawn(move || client(&shared, stream));
-                if let Err(error) = spawned {
-                    log(format!("cannot start a client thread: {error}"));
-                }
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                log(format!("accept: {error}"));
+                continue;
             }
-            Err(error) => log(format!("accept: {error}")),
+        };
+        let credentials = match getsockopt(&stream, PeerCredentials) {
+            Ok(credentials) => credentials,
+            Err(errno) => {
+                log(format!(
+                    "SO_PEERCRED failed ({errno}); dropping the connection"
+                ));
+                continue;
+            }
+        };
+        let ticket = match admission.admit(credentials.uid()) {
+            Ok(ticket) => ticket,
+            Err(reason) => {
+                refuse(stream, credentials.pid(), &reason);
+                continue;
+            }
+        };
+        let shared = Arc::clone(&shared);
+        let spawned = std::thread::Builder::new()
+            .name("client".into())
+            .spawn(move || client(&shared, stream, credentials, ticket));
+        if let Err(error) = spawned {
+            log(format!("cannot start a client thread: {error}"));
         }
     }
     Ok(())
 }
 
-/// Binds the socket, replacing only a stale socket, never another file,
-/// and opens it to every user: who may see what is decided per client.
-fn bind(path: &Path) -> Result<(UnixListener, u64), String> {
-    let shown = path.display();
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o755)
-            .create(parent)
-            .map_err(|error| format!("create {}: {error}", parent.display()))?;
+/// Turns a connection away on the accept thread, without a thread of its
+/// own: one `Rejected` frame, written without waiting for the handshake.
+/// The client reads it as the reply to its handshake, and falls back to
+/// notify.
+fn refuse(mut stream: UnixStream, pid: i32, reason: &str) {
+    log(format!("refused a connection from pid {pid}: {reason}"));
+    let _ = stream.set_write_timeout(Some(REFUSAL_TIMEOUT));
+    let _ = Reply::Rejected {
+        reason: reason.to_string(),
     }
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_socket() => {
-            if UnixStream::connect(path).is_ok() {
-                return Err(format!("another helper is listening on {shown}"));
-            }
-            fs::remove_file(path).map_err(|error| format!("remove stale {shown}: {error}"))?;
-        }
-        Ok(_) => {
-            return Err(format!(
-                "{shown} exists and is not a socket; not replacing it"
-            ));
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("{shown}: {error}")),
-    }
-    let listener = UnixListener::bind(path).map_err(|error| format!("bind {shown}: {error}"))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o666))
-        .map_err(|error| format!("chmod {shown}: {error}"))?;
-    let inode = fs::symlink_metadata(path)
-        .map_err(|error| format!("{shown}: {error}"))?
-        .ino();
-    Ok((listener, inode))
+    .write_to(&mut stream);
 }
 
 /// Exits once the socket is no longer the one bound.
@@ -372,17 +415,9 @@ fn read_events(shared: &Shared) {
     }
 }
 
-/// Serves one client connection, then drops its subscriptions.
-fn client(shared: &Shared, stream: UnixStream) {
-    let credentials = match getsockopt(&stream, PeerCredentials) {
-        Ok(credentials) => credentials,
-        Err(errno) => {
-            log(format!(
-                "SO_PEERCRED failed ({errno}); dropping the connection"
-            ));
-            return;
-        }
-    };
+/// Serves one client connection, then drops its subscriptions. `_ticket`
+/// holds the connection's place among the open ones until then.
+fn client(shared: &Shared, stream: UnixStream, credentials: UnixCredentials, _ticket: Ticket) {
     let (pid, uid, gid) = (credentials.pid(), credentials.uid(), credentials.gid());
     let id = shared.next_client.fetch_add(1, Ordering::Relaxed);
     log(format!("client {id}: pid {pid}, uid {uid} connected"));
@@ -417,6 +452,16 @@ fn serve_client(shared: &Shared, stream: UnixStream, id: u64, who: Identity) -> 
             }
         },
     }
+    // Held until the checker has exited: `serve_client` joins the event
+    // thread, the checker's other owner, before it returns.
+    let Some(_checker_place) = shared.checkers.enter() else {
+        return reply(Reply::Rejected {
+            reason: format!(
+                "the helper is running its maximum of {} checkers; try again later",
+                shared.checkers.limit()
+            ),
+        });
+    };
     let checker = match Checker::spawn(&shared.exe, &who) {
         Ok(checker) => Arc::new(Mutex::new(checker)),
         Err(error) => {
@@ -432,7 +477,7 @@ fn serve_client(shared: &Shared, stream: UnixStream, id: u64, who: Identity) -> 
     })?;
     reader.set_read_timeout(None)?;
 
-    let (queue, deliveries) = sync_channel(QUEUE);
+    let (queue, deliveries) = sync_channel(shared.limits.queue);
     let lagged = Arc::new(AtomicBool::new(false));
     let sender = {
         let (writer, checker, lagged) = (
@@ -442,7 +487,15 @@ fn serve_client(shared: &Shared, stream: UnixStream, id: u64, who: Identity) -> 
         );
         std::thread::Builder::new()
             .name("client-events".into())
-            .spawn(move || send_events(&deliveries, &writer, &checker, &lagged))?
+            .spawn(move || {
+                let may_see = |root: &Path, path: &Path, binding: Binding| {
+                    lock(&checker).may_see(root, path, binding)
+                };
+                if let Err(error) = send_events(&deliveries, &writer, may_see, &lagged) {
+                    log(format!("{error}; dropping the client"));
+                    let _ = lock(&writer).shutdown(std::net::Shutdown::Both);
+                }
+            })?
     };
     let subscriber = Subscriber {
         client: id,
@@ -466,6 +519,7 @@ fn read_requests(
     checker: &Mutex<Checker>,
     subscriber: Subscriber,
 ) -> io::Result<()> {
+    let mut subscriptions = Subscriptions::new(shared.limits.subscriptions);
     loop {
         let Some((tag, body)) = read_frame(reader)? else {
             return Ok(());
@@ -484,6 +538,10 @@ fn read_requests(
         // Hold the writer while registering, so no event for the root can
         // be written before its acceptance.
         let mut out = lock(writer);
+        let decision = decision.and_then(|canonical| {
+            subscriptions.check(&canonical)?;
+            Ok(canonical)
+        });
         let reply = match decision {
             Err(reason) => Reply::Refused { root, reason },
             Ok(canonical) => {
@@ -492,7 +550,10 @@ fn read_requests(
                     canonical.clone(),
                     subscriber.clone(),
                 ) {
-                    Ok(()) => Reply::Accepted { root: canonical },
+                    Ok(()) => {
+                        subscriptions.insert(canonical.clone());
+                        Reply::Accepted { root: canonical }
+                    }
                     Err(reason) => Reply::Refused { root, reason },
                 }
             }
@@ -514,37 +575,38 @@ fn read_requests(
     }
 }
 
-/// A client's event thread: sends each queued event the client may see.
-fn send_events(
+/// A client's event thread: sends each queued event the client may see, as
+/// `may_see` (the client's checker) decides, and an overflow once the queue
+/// has dropped any. Returns when the queue's senders are gone, or with an
+/// error once the checker or the connection fails.
+fn send_events<W: Write>(
     deliveries: &Receiver<Delivery>,
-    writer: &Mutex<UnixStream>,
-    checker: &Mutex<Checker>,
+    writer: &Mutex<W>,
+    mut may_see: impl FnMut(&Path, &Path, Binding) -> io::Result<bool>,
     lagged: &AtomicBool,
-) {
-    let stop = || {
-        let _ = lock(writer).shutdown(std::net::Shutdown::Both);
-    };
+) -> Result<(), String> {
     for delivery in deliveries {
         let reply = match delivery {
             Delivery::Overflow => Some(Reply::Overflow),
-            Delivery::Event { root, event } => match lock(checker).may_see(&root, &event.path) {
+            Delivery::Event {
+                root,
+                event,
+                binding,
+            } => match may_see(&root, &event.path, binding) {
                 Ok(true) => Some(Reply::Event(event)),
                 Ok(false) => None,
-                Err(error) => {
-                    log(format!("the checker failed ({error}); dropping the client"));
-                    return stop();
-                }
+                Err(error) => return Err(format!("the checker failed ({error})")),
             },
         };
         let overflow = lagged.swap(false, Ordering::Relaxed);
         let mut out = lock(writer);
         for reply in reply.into_iter().chain(overflow.then_some(Reply::Overflow)) {
-            if reply.write_to(&mut *out).is_err() {
-                drop(out);
-                return stop();
-            }
+            reply
+                .write_to(&mut *out)
+                .map_err(|error| format!("writing to the client failed ({error})"))?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -559,19 +621,82 @@ mod tests {
         assert!(!same_fs(0x1234_5678_9abc_def0, 0x9abc_def1));
     }
 
+    const BOUND: Binding = Binding::Dir(DirId { dev: 1, ino: 2 });
+
+    fn event(name: &str) -> Delivery {
+        Delivery::Event {
+            root: PathBuf::from("/r"),
+            event: HelperEvent {
+                path: Path::new("/r").join(name),
+                kind: codetags_watch::privhelper::proto::EventKind::Modified,
+                pid: None,
+            },
+            binding: BOUND,
+        }
+    }
+
+    /// The replies in the bytes `send_events` wrote.
+    fn replies(mut bytes: &[u8]) -> Vec<Reply> {
+        let mut out = Vec::new();
+        while let Some(reply) = Reply::read_from(&mut bytes).unwrap() {
+            out.push(reply);
+        }
+        out
+    }
+
+    /// A client that falls behind costs at most its queue: what does not
+    /// fit is dropped, and the client is sent an overflow, so it rescans.
     #[test]
-    fn bind_replaces_a_stale_socket_but_never_a_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("run/codetags/helper.sock");
-        let (listener, _) = bind(&path).unwrap();
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o666);
-        assert!(bind(&path).unwrap_err().contains("another helper"));
-        drop(listener);
-        bind(&path).unwrap();
-        let file = dir.path().join("file");
-        fs::write(&file, "keep").unwrap();
-        assert!(bind(&file).unwrap_err().contains("not a socket"));
-        assert_eq!(fs::read_to_string(&file).unwrap(), "keep");
+    fn a_full_queue_drops_events_and_sends_an_overflow() {
+        let (queue, deliveries) = sync_channel(2);
+        let lagged = Arc::new(AtomicBool::new(false));
+        let subscriber = Subscriber {
+            client: 1,
+            queue,
+            lagged: Arc::clone(&lagged),
+        };
+        for name in ["a", "b", "c", "d", "e"] {
+            subscriber.deliver(event(name));
+        }
+        assert!(lagged.load(Ordering::Relaxed));
+        drop(subscriber);
+        let writer = Mutex::new(Vec::new());
+        let mut asked = Vec::new();
+        let may_see = |_: &Path, path: &Path, binding| {
+            asked.push((path.to_path_buf(), binding));
+            Ok(true)
+        };
+        send_events(&deliveries, &writer, may_see, &lagged).unwrap();
+        let sent = replies(&lock(&writer));
+        let events = sent.iter().filter(|r| matches!(r, Reply::Event(_))).count();
+        let overflows = sent.iter().filter(|r| matches!(r, Reply::Overflow)).count();
+        assert_eq!((events, overflows), (2, 1), "{sent:?}");
+        // The checker was asked about each, with the binding it came with.
+        assert_eq!(
+            asked,
+            [
+                (PathBuf::from("/r/a"), BOUND),
+                (PathBuf::from("/r/b"), BOUND)
+            ]
+        );
+    }
+
+    #[test]
+    fn events_the_checker_refuses_are_not_sent() {
+        let (queue, deliveries) = sync_channel(4);
+        queue.send(event("seen")).unwrap();
+        queue.send(event("hidden")).unwrap();
+        drop(queue);
+        let writer = Mutex::new(Vec::new());
+        let lagged = AtomicBool::new(false);
+        let may_see = |_: &Path, path: &Path, _| Ok(path.ends_with("seen"));
+        send_events(&deliveries, &writer, may_see, &lagged).unwrap();
+        assert_eq!(replies(&lock(&writer)).len(), 1);
+
+        let (queue, deliveries) = sync_channel(1);
+        queue.send(event("x")).unwrap();
+        let failing = |_: &Path, _: &Path, _| Err(io::Error::other("gone"));
+        let error = send_events(&deliveries, &writer, failing, &lagged).unwrap_err();
+        assert!(error.contains("checker failed"), "{error}");
     }
 }

@@ -21,20 +21,115 @@
 //! |---|---|---|
 //! | (none) | | `K` once privileges are dropped, or `N` and a reason |
 //! | `R` | root path | `Y` and the canonical root, or `N` and a reason |
-//! | `P` | `u32` root length, root, path | `Y` or `N` |
+//! | `P` | `u32` root length, root, binding (17 bytes), path | `Y` or `N` |
+//!
+//! A path is a name at a moment: by the time the checker sees it, someone
+//! may have renamed the directories it passes through (threat model F1). So
+//! each `P` request carries a [`Binding`], the identity of what the helper
+//! resolved, and the checker answers `Y` only if the path, resolved now as
+//! the client, still leads there. Numbers are little-endian.
 
 use std::ffi::{CString, OsStr};
 use std::io::{self, Write};
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use codetags_watch::privhelper::proto::{read_frame, write_frame};
-use nix::fcntl::AtFlags;
+use nix::fcntl::{AtFlags, OFlag};
+use nix::sys::stat::Mode;
 use nix::unistd::{AccessFlags, Gid, Uid, User};
 
 /// The argument that starts a checker.
 pub const CHECKER_ARG: &str = "--checker";
+
+/// A filesystem object's identity: its device and inode numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirId {
+    /// `st_dev`.
+    pub dev: u64,
+    /// `st_ino`.
+    pub ino: u64,
+}
+
+impl DirId {
+    /// The identity of the open object `fd` (an `O_PATH` descriptor will do).
+    pub fn of(fd: impl AsFd) -> io::Result<Self> {
+        let stat = nix::sys::stat::fstat(fd)?;
+        Ok(Self {
+            dev: stat.st_dev,
+            ino: stat.st_ino,
+        })
+    }
+
+    /// The identity of the object at `path`, not following a final
+    /// symlink.
+    #[cfg(test)]
+    pub fn of_path(path: &Path) -> io::Result<Self> {
+        let stat = nix::sys::stat::lstat(path)?;
+        Ok(Self {
+            dev: stat.st_dev,
+            ino: stat.st_ino,
+        })
+    }
+}
+
+/// What an event's path must still lead to when it is checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// The event named an entry in a directory, and this is the directory.
+    /// The directory holding the path (the root itself, for the root) must
+    /// be it.
+    Dir(DirId),
+    /// The event named an object itself, and this is the object. The
+    /// directory holding the path must hold it, under the path's last
+    /// name. For the root itself, the root must be it.
+    Entry(DirId),
+}
+
+impl Binding {
+    /// Its encoding: a tag byte (`D` or `E`), then `dev` and `ino`.
+    fn encode(self, out: &mut Vec<u8>) {
+        let (tag, id) = match self {
+            Binding::Dir(id) => (b'D', id),
+            Binding::Entry(id) => (b'E', id),
+        };
+        out.push(tag);
+        out.extend_from_slice(&id.dev.to_le_bytes());
+        out.extend_from_slice(&id.ino.to_le_bytes());
+    }
+
+    /// Decodes [`Binding::encode`]'s output from the start of `bytes`, and
+    /// returns the rest.
+    fn decode(bytes: &[u8]) -> Option<(Self, &[u8])> {
+        let (tag, rest) = bytes.split_first()?;
+        let (dev, rest) = rest.split_first_chunk::<8>()?;
+        let (ino, rest) = rest.split_first_chunk::<8>()?;
+        let id = DirId {
+            dev: u64::from_le_bytes(*dev),
+            ino: u64::from_le_bytes(*ino),
+        };
+        match tag {
+            b'D' => Some((Binding::Dir(id), rest)),
+            b'E' => Some((Binding::Entry(id), rest)),
+            _ => None,
+        }
+    }
+}
+
+/// A `P` request's body.
+fn path_request(root: &Path, path: &Path, binding: Binding) -> io::Result<Vec<u8>> {
+    let root = root.as_os_str().as_bytes();
+    let mut body = u32::try_from(root.len())
+        .map_err(|_| frame_error("root too long"))?
+        .to_le_bytes()
+        .to_vec();
+    body.extend_from_slice(root);
+    binding.encode(&mut body);
+    body.extend_from_slice(path.as_os_str().as_bytes());
+    Ok(body)
+}
 
 /// Who a checker runs as.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,15 +247,10 @@ impl Checker {
         })
     }
 
-    /// Whether the user may learn of `path`, under the accepted `root`.
-    pub fn may_see(&mut self, root: &Path, path: &Path) -> io::Result<bool> {
-        let root = root.as_os_str().as_bytes();
-        let mut body = u32::try_from(root.len())
-            .map_err(|_| frame_error("root too long"))?
-            .to_le_bytes()
-            .to_vec();
-        body.extend_from_slice(root);
-        body.extend_from_slice(path.as_os_str().as_bytes());
+    /// Whether the user may learn of `path`, under the accepted `root`,
+    /// where the event came from what `binding` names.
+    pub fn may_see(&mut self, root: &Path, path: &Path, binding: Binding) -> io::Result<bool> {
+        let body = path_request(root, path, binding)?;
         match self.ask(b'P', &body)? {
             (b'Y', _) => Ok(true),
             (b'N', _) => Ok(false),
@@ -233,22 +323,48 @@ fn check_root(root: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-/// Answers a `P` request: `path` must be under `root`, and the user must be
-/// able to list the directory that holds it (or, for the root itself, the
-/// root). A name in a directory the user cannot list is never shown.
-fn may_see(root: &Path, path: &Path) -> bool {
+/// Opens the directory `dir` as the current user, without following a
+/// final symlink, and only if the user may list it: read and search
+/// permission on the directory opened, so the check and the identity are of
+/// the same object, whatever happens to the path afterwards.
+fn open_listable(dir: &Path) -> Option<OwnedFd> {
+    let flags = OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let fd = nix::fcntl::open(dir, flags, Mode::empty()).ok()?;
+    nix::unistd::faccessat(
+        &fd,
+        ".",
+        AccessFlags::R_OK | AccessFlags::X_OK,
+        AtFlags::AT_EACCESS,
+    )
+    .ok()?;
+    Some(fd)
+}
+
+/// Answers a `P` request: `path` must be under `root`; the user must be able
+/// to list the directory that holds it (or, for the root itself, the root);
+/// and that directory must be the one the event came from (threat model
+/// F1). A name in a directory the user cannot list is never shown, and
+/// neither is a name whose path has since been pointed somewhere the user
+/// can list.
+fn may_see(root: &Path, path: &Path, binding: Binding) -> bool {
     if !path.starts_with(root) {
         return false;
     }
-    let dir = if path == root {
-        root
-    } else {
-        match path.parent() {
-            Some(parent) => parent,
-            None => return false,
-        }
+    if path == root {
+        let (Binding::Dir(id) | Binding::Entry(id)) = binding;
+        return open_listable(root).is_some_and(|fd| DirId::of(&fd).ok() == Some(id));
+    }
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
     };
-    can_list(dir).is_ok()
+    let Some(fd) = open_listable(dir) else {
+        return false;
+    };
+    match binding {
+        Binding::Dir(id) => DirId::of(&fd).ok() == Some(id),
+        Binding::Entry(id) => nix::sys::stat::fstatat(&fd, name, AtFlags::AT_SYMLINK_NOFOLLOW)
+            .is_ok_and(|stat| (stat.st_dev, stat.st_ino) == (id.dev, id.ino)),
+    }
 }
 
 fn answer(body: &[u8]) -> (u8, Vec<u8>) {
@@ -256,14 +372,17 @@ fn answer(body: &[u8]) -> (u8, Vec<u8>) {
         return (b'N', Vec::new());
     };
     let len = u32::from_le_bytes(*len) as usize;
-    let (Some(root), Some(path)) = (rest.get(..len), rest.get(len..)) else {
+    let (Some(root), Some(rest)) = (rest.get(..len), rest.get(len..)) else {
+        return (b'N', Vec::new());
+    };
+    let Some((binding, path)) = Binding::decode(rest) else {
         return (b'N', Vec::new());
     };
     let (root, path) = (
         Path::new(OsStr::from_bytes(root)),
         Path::new(OsStr::from_bytes(path)),
     );
-    if may_see(root, path) {
+    if may_see(root, path, binding) {
         (b'Y', Vec::new())
     } else {
         (b'N', Vec::new())
@@ -342,6 +461,11 @@ mod tests {
         assert!(check_root(&dir.path().join("absent")).is_err());
     }
 
+    /// The binding of an entry named in `dir`.
+    fn held_by(dir: &Path) -> Binding {
+        Binding::Dir(DirId::of_path(dir).unwrap())
+    }
+
     #[test]
     fn a_path_is_seen_only_under_its_root_in_a_listable_directory() {
         use std::os::unix::fs::PermissionsExt;
@@ -349,13 +473,19 @@ mod tests {
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let closed = root.join("closed");
         std::fs::create_dir(&closed).unwrap();
-        assert!(may_see(&root, &root));
-        assert!(may_see(&root, &root.join("a.rs")));
-        assert!(may_see(&root, &closed));
-        assert!(may_see(&root, &closed.join("x")));
-        assert!(!may_see(&root, Path::new("/etc/passwd")));
+        assert!(may_see(&root, &root, held_by(&root)));
+        assert!(may_see(&root, &root.join("a.rs"), held_by(&root)));
+        assert!(may_see(&root, &closed, held_by(&root)));
+        assert!(may_see(&root, &closed.join("x"), held_by(&closed)));
+        assert!(!may_see(
+            &root,
+            Path::new("/etc/passwd"),
+            held_by(Path::new("/etc"))
+        ));
         std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o300)).unwrap();
-        let listable = can_list(&closed).is_ok();
+        let listable = may_see(&root, &closed.join("x"), held_by(&closed));
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let searchable = may_see(&root, &closed.join("x"), held_by(&closed));
         std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700)).unwrap();
         // Root ignores permission bits, so this only bites unprivileged.
         if !Uid::effective().is_root() {
@@ -363,18 +493,74 @@ mod tests {
                 !listable,
                 "a directory without read permission is not listable"
             );
+            assert!(
+                !searchable,
+                "a directory without search permission is not listable"
+            );
         }
     }
 
+    /// Threat model F1: the decision is bound to the directory the event
+    /// came from. A path that now resolves to another directory is refused,
+    /// even though the client could list that other directory.
     #[test]
-    fn path_requests_decode() {
+    fn a_path_resolving_to_another_directory_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        let mut body = (root.as_os_str().len() as u32).to_le_bytes().to_vec();
-        body.extend_from_slice(root.as_os_str().as_bytes());
-        body.extend_from_slice(root.join("a").as_os_str().as_bytes());
+        let (secret, open) = (root.join("secret"), root.join("open"));
+        std::fs::create_dir(&secret).unwrap();
+        std::fs::create_dir(&open).unwrap();
+        // The event came from `secret`; its path, by the time it is
+        // checked, names `open` (as after a rename swapping the two).
+        assert!(may_see(&root, &secret.join("x"), held_by(&secret)));
+        assert!(!may_see(&root, &open.join("x"), held_by(&secret)));
+        // The root itself is bound the same way.
+        assert!(!may_see(&root, &root, held_by(&secret)));
+        // A swap done for real: rename `secret` away and `open` into its
+        // place. The recorded identity is the old `secret`.
+        let recorded = held_by(&secret);
+        std::fs::rename(&secret, root.join("moved")).unwrap();
+        std::fs::rename(&open, &secret).unwrap();
+        assert!(!may_see(&root, &secret.join("x"), recorded));
+        assert!(may_see(&root, &root.join("moved/x"), recorded));
+    }
+
+    /// An event naming an object, not an entry in a directory, is bound to
+    /// that object: the directory its path resolves to must hold it, under
+    /// that name.
+    #[test]
+    fn an_object_is_seen_only_where_its_path_finds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        std::fs::write(a.join("f"), "").unwrap();
+        std::fs::write(b.join("f"), "").unwrap();
+        let object = Binding::Entry(DirId::of_path(&a.join("f")).unwrap());
+        assert!(may_see(&root, &a.join("f"), object));
+        assert!(!may_see(&root, &b.join("f"), object));
+        assert!(!may_see(&root, &a.join("absent"), object));
+        let itself = Binding::Entry(DirId::of_path(&root).unwrap());
+        assert!(may_see(&root, &root, itself));
+    }
+
+    #[test]
+    fn path_requests_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let body = path_request(&root, &root.join("a"), held_by(&root)).unwrap();
+        assert_eq!(answer(&body).0, b'Y');
+        let body = path_request(&root, &root.join("a"), held_by(other.path())).unwrap();
+        assert_eq!(answer(&body).0, b'N');
+        let entry = Binding::Entry(DirId::of_path(&root).unwrap());
+        let body = path_request(&root, &root, entry).unwrap();
         assert_eq!(answer(&body).0, b'Y');
         assert_eq!(answer(&[1, 0]).0, b'N');
         assert_eq!(answer(&[9, 0, 0, 0, b'/']).0, b'N');
+        let mut short = body.clone();
+        short.truncate(4 + root.as_os_str().len() + 10);
+        assert_eq!(answer(&short).0, b'N');
     }
 }

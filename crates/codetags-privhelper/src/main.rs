@@ -49,6 +49,12 @@
 //!   shows one user another user's file names, even inside a root the client
 //!   owns; `docs/privhelper-threat-model.md` records where that still falls
 //!   short.
+//! - **Decisions are bound to objects, not names.** A path is resolved from
+//!   the event's file handle before it is checked, and someone may rename
+//!   its directories in between. So the helper records the identity (device
+//!   and inode) of the directory the event came from, taken from the opened
+//!   handle, and the checker refuses the event unless the directory it opens
+//!   for the path, as the client, is that one (`checker::may_see`).
 //! - **What a client learns.** Paths it could list anyway, the kind of
 //!   change, and the writer's PID. PIDs are visible in `/proc` to every user
 //!   unless `/proc` is mounted with `hidepid`; on such a system, note that
@@ -60,10 +66,19 @@
 //!   handles with `O_PATH`. It never follows a client's path as root: the
 //!   root it marks is the one the checker canonicalized, opened with
 //!   `O_NOFOLLOW`, and every event path is re-checked as the client.
-//! - **The socket.** Only an existing *socket* at the path is replaced, and
-//!   only if nothing answers on it; any other file is left alone and the
-//!   helper refuses to start. The helper exits if its socket is removed or
-//!   replaced.
+//! - **The socket.** Its directory must be a real directory (not a symlink),
+//!   owned by root and writable by no one else, or the helper refuses to
+//!   start; `/run/codetags`, as the helper or systemd's `RuntimeDirectory=`
+//!   creates it, qualifies. All the setup works on that directory opened,
+//!   and the socket gets its mode as it is created (`socket::bind`). Only an
+//!   existing *socket* at the path is replaced, and only if nothing answers
+//!   on it; any other file is left alone and the helper refuses to start.
+//!   The helper exits if its socket is removed or replaced.
+//! - **Limits.** Connections (in total and per uid), checker processes,
+//!   subscriptions per connection and each connection's event queue are
+//!   capped (`--max-*`, `--queue`; `limits.rs`). A connection or subscription
+//!   over a cap is refused with a protocol error; a full queue drops events
+//!   and sends the client an overflow, so it rescans.
 //! - **Mount namespaces.** Paths are as the helper sees them. A client in
 //!   another mount namespace (a container) whose paths differ receives
 //!   nothing for them, and falls back to notify.
@@ -105,17 +120,32 @@ mod fanotify;
 #[cfg(target_os = "linux")]
 mod handle;
 #[cfg(target_os = "linux")]
+mod limits;
+#[cfg(target_os = "linux")]
 mod parse;
 #[cfg(target_os = "linux")]
 mod server;
+#[cfg(target_os = "linux")]
+mod socket;
 
 const USAGE: &str = "\
-usage: codetags-privhelper [--socket PATH]
+usage: codetags-privhelper [--socket PATH] [LIMITS]
 
 The optional privileged helper for codetags: run it as root. It serves
 fanotify events on a Unix socket (default /run/codetags/privhelper.sock, or
 $CODETAGS_PRIVHELPER_SOCKET) to codetags watchers, filtered per client.
-codetags works without it.";
+codetags works without it.
+
+The socket's directory must be a real directory owned by root and writable
+only by root; the helper refuses any other.
+
+Limits (each a positive number):
+  --max-connections N          open connections in total (default 128)
+  --max-connections-per-uid N  open connections from one uid (default 16)
+  --max-checkers N             running checker processes (default 64)
+  --max-subscriptions N        roots per connection (default 32)
+  --queue N                    events queued per connection before it is sent
+                               an overflow (default 8192)";
 
 fn main() {
     std::process::exit(run());
@@ -138,6 +168,7 @@ fn run() -> i32 {
             || PathBuf::from(codetags_watch::privhelper::DEFAULT_SOCKET),
             PathBuf::from,
         );
+    let mut limits = limits::Limits::default();
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -145,6 +176,21 @@ fn run() -> i32 {
                 Some(path) => socket = PathBuf::from(path),
                 None => return usage_error("--socket needs a path"),
             },
+            Some(
+                flag @ ("--max-connections"
+                | "--max-connections-per-uid"
+                | "--max-checkers"
+                | "--max-subscriptions"
+                | "--queue"),
+            ) => {
+                let value = args.next().map(|v| v.to_string_lossy().into_owned());
+                let set = value
+                    .ok_or_else(|| format!("{flag} needs a number"))
+                    .and_then(|value| limits.set(flag, &value));
+                if let Err(message) = set {
+                    return usage_error(&message);
+                }
+            }
             Some("--help" | "-h") => {
                 println!("{USAGE}");
                 return 0;
@@ -156,7 +202,7 @@ fn run() -> i32 {
             _ => return usage_error(&format!("unknown argument {arg:?}")),
         }
     }
-    match server::serve(&server::Options { socket }) {
+    match server::serve(&server::Options { socket, limits }) {
         Ok(()) => 0,
         Err(error) => {
             server::log(error);

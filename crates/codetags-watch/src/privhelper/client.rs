@@ -97,10 +97,15 @@ impl Client {
             backend: String::new(),
             early: VecDeque::new(),
         };
-        Request::Hello { version: VERSION }
-            .write_to(&mut client.stream)
-            .map_err(|error| HelperError::Handshake(error.to_string()))?;
-        match client.read_reply() {
+        // A helper over its connection limit writes its refusal and hangs
+        // up without reading this; if it did so first, the write fails but
+        // the refusal is still there to read.
+        let hello = Request::Hello { version: VERSION }.write_to(&mut client.stream);
+        let reply = client.read_reply();
+        if let (Err(error), Err(_)) = (&hello, &reply) {
+            return Err(HelperError::Handshake(error.to_string()));
+        }
+        match reply {
             Ok(Reply::Welcome { version, backend }) if version == VERSION => {
                 client.backend = backend;
                 Ok(client)
@@ -370,6 +375,34 @@ mod tests {
         );
         let error = Client::connect(&socket).unwrap_err();
         assert!(matches!(error, HelperError::Handshake(ref r) if r == "go away"));
+    }
+
+    /// A helper over its connection limit writes its refusal at once and
+    /// hangs up without reading the handshake. The client still reads the
+    /// reason, whichever of the two happened first.
+    #[test]
+    fn a_refusal_before_the_handshake_is_read_is_still_a_rejection() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("helper.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let helper = std::thread::spawn(move || {
+            for _ in 0..20 {
+                let (mut stream, _) = listener.accept().unwrap();
+                Reply::Rejected {
+                    reason: "over the limit".into(),
+                }
+                .write_to(&mut stream)
+                .unwrap();
+            }
+        });
+        for _ in 0..20 {
+            let error = Client::connect(&socket).unwrap_err();
+            assert!(
+                matches!(error, HelperError::Handshake(ref r) if r == "over the limit"),
+                "{error}"
+            );
+        }
+        helper.join().unwrap();
     }
 
     #[test]
