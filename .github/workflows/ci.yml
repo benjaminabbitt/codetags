@@ -524,6 +524,13 @@ jobs:
           CODETAGS_BDD_RAN: ${{ runner.temp }}/bdd-ran.txt
         run: just test-privileged
 
+      # The helper's unit tests as root, for their root-only branches (such
+      # as a root-owned socket directory accepted). Built as the runner;
+      # only the test binary runs under sudo.
+      - name: just test-privileged unit-as-root
+        shell: bash
+        run: just test-privileged unit-as-root
+
       - name: Upload the BDD record
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

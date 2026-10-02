@@ -164,9 +164,13 @@ baseline-update:
 # codetags-privhelper with `sudo -n` themselves, so sudo must need no
 # password, while the scenarios and their watchers run as the calling,
 # unprivileged user. Builds the helper binary first: the bdd test does not.
-test-privileged:
-    cargo build --workspace --bins
-    CODETAGS_BDD_CAPABILITIES=privileged cargo test --workspace --test bdd
+# With SUITE=unit-as-root, instead runs codetags-privhelper's unit tests
+# under `sudo -n` (ci/privhelper-unit-as-root.sh), for their root-only
+# branches; the test binary is built as the calling user.
+test-privileged SUITE="features":
+    @case "{{SUITE}}" in features|unit-as-root) ;; *) echo "test-privileged: SUITE is features or unit-as-root, not {{SUITE}}"; exit 1;; esac
+    if [ "{{SUITE}}" = features ]; then cargo build --workspace --bins && CODETAGS_BDD_CAPABILITIES=privileged cargo test --workspace --test bdd; fi
+    if [ "{{SUITE}}" = unit-as-root ]; then sh ci/privhelper-unit-as-root.sh; fi
 
 # Claude Code's LSP client, observed live (M3 stage 0, D16-D18;
 # features/lsp/claude-client.feature, docs/lsp-stage0.md): only the @claude
