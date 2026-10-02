@@ -34,8 +34,8 @@ allow = [
 # lspmux (EUPL-1.2) needs none: it is installed and run, never linked (D14).
 exceptions = [
     # The Unlicense (permissive, OSI-approved public-domain dedication), scoped
-    # to the nfs3 crates under codetags-mount-nfs (P0b S2, V42). Pending the
-    # human's approval (PLAN.md §0.12); the alternative, nfsserve, needs none.
+    # to the nfs3 crates under codetags-mount-nfs (P0b S2, V42). Approved by
+    # the human (PLAN.md D38).
     { crate = "nfs3_types", allow = ["Unlicense"] },
     { crate = "nfs3_macros", allow = ["Unlicense"] },
     { crate = "winfsp", allow = ["GPL-3.0"] },

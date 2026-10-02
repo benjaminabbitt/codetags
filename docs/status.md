@@ -22,50 +22,32 @@ cross-job BDD coverage, unless a row says otherwise.
 
 ## Waiting on you
 
-Each item has the default currently built or proposed.
-
 **Reviews that gate work:**
 1. **D11–D13** (PLAN.md §2.10–§2.12): BATFS-style editing, the recursion guard, the change notifier. This gates P6.4–P6.6 and P4.6–P4.7.
 2. **Spec drafts**, in `docs/spec-drafts/`, each with its questions at the top:
    - `views/` (P2.1): gates all of P2 and P5, and dogfood milestone M1.
    - `plugins/` (P7.1): gates P7.
-   - `tags/` (P6.1): gates P6.
-   - `p3-plan.md`: most of it is settled. Questions (a), (d), (e) and 3 are
-     decided (D16, D20, D19, D17), and 1, 2 and 6 are built as proposed (2
-     with sh wrappers on Linux and macOS, executables on Windows, V119).
-     Questions 4 and 5 are decided too: all three configuration policies
-     are in v1 (D24), and the root is canonicalized with URIs rewritten (D26, superseding D23). Still
-     open: (b) and (c) (decision 3), and 7 (the daemon's environment leaks
-     into every server). These gate P3.4's toolchain key, not the rest of
-     P3.
+   - `tags/` (P6.1): gates P6. Its merge questions are answered by D39
+     (a per-item merge driver).
 
-**Decisions:**
+**Waiting on your action:**
+- Add the `ANTHROPIC_API_KEY` repository secret (D30), then say so: the
+  `claude-client` job's expected-skip entries go in the same change.
+- Write the upstream lspmux PR once the P3.11 notes exist (D29).
+- Sign off the privileged helper's threat model once it is written (D40).
 
-| # | Decision | Default |
-|---|---|---|
-| 3 | The lspmux questions: (a), (d), (e) and the transport are **decided** (D16, D17, D19, D20); still open are (b) multi-user Windows scope and (c) who writes the upstream `applyEdit` PR. rust-analyzer never sends `applyEdit`, so (c) only matters for gopls. | (b) out of v1; (c) you, gap accepted until then |
-| 4 | **Decided (D17):** a Unix socket in a 0700 directory on Linux and macOS. Windows stays loopback TCP, which is (b) in decision 3. | — |
-| 5 | Naming (PLAN §2.7): impl blocks are containers; `+fn`, `+field`, `+const` and `+static` suffixes only on a collision; Rust names start with the crate; the standard library and dependencies get their crate too; value precedence on a collision is fn, then const, static, field | as listed |
-| 6 | Rust trait and `dyn` expansion: rust-analyzer emits no `is_implementation` relationships (V64), while Go, TS and Python do. Options: match by name, ask LSP for implementations, or accept the gap. | `declared` targets only |
-| 7 | The Unlicense on `nfs3_types` and `nfs3_macros` (S2) | scoped exceptions in `deny.toml`; `nfsserve` is the fallback |
-| 8 | Windows watcher overflow: notify 8.2 drops it (V56). Options: notify 9.0-rc, or a periodic reconcile. | neither yet |
-| 9 | Git merges of the tags file conflict on *adjacent* lines too (V70). Options: a per-item merge driver, or accept git's behaviour. | — |
-| 10 | Windows names with a trailing dot or space, and the `NUL` device-name note (S4) | — |
-| 11 | P1.3b, control context and literal names per call site, needs a parser beyond SCIP (tree-sitter?) | split out, not started |
-| 12 | Should `codetags index` print the resolution report after every run (brief: "after every run")? | — |
-| 13 | Review the privileged helper's security model before anyone installs it (`codetags-privhelper` crate docs). Should writer PIDs reach watcher batches, for D12? | — |
-| 14 | The eval repo for conditions A, B and C (brief §4.6, still [OPEN]) | — |
-| 15 | scip-python 0.6.6 can't start on Windows (open upstream bug sourcegraph/scip-python#210). `just setup-providers` patches the installed package (`tools/patch-scip-python.js`), with guards, until the fix (#224) is released. The alternative is a Windows exception for Python (R2). | the patch |
-| 16 | Add an `ANTHROPIC_API_KEY` repo secret, so the live Claude Code LSP test (`claude-client` job) runs in CI | not set; the job skips itself |
+**Decisions:** none open. The 15 that were listed here were decided on
+2026-10-01 as D27–D41 (PLAN.md §1.1). The `p3-plan.md` draft is fully
+settled (D16, D17, D19, D20, D23–D24, D26–D29).
 
 ## Remaining work
 
 | Phase | Remaining | Blocked on |
 |---|---|---|
-| P1 | Ingest for Go, TS and Python (call-graph join, the Jelly union, name-match candidates); multi-language `codetags index`; P1.3b; trait expansion | Decisions 6 and 11 for parts; the rest is ready |
-| P2 | `ViewFs`, renderers as built-in plugins, the tagma bridge, the materializer, `codetags q`/`show`, the eval harness | The P2.1 review; the eval repo |
-| P3 | P3.12 the readiness gate; P3.13 live-test follow-ups; P3.6's configuration merge now includes the cross-session coordinator (D24); P3.4 routing-key injection and wrappers for gopls, pyright and the TS server; P3.5 the full fixed capability set; P3.6 configuration merge; P3.7 crash recovery; P3.8 the watcher client (gopls); P3.10 gopls, real VS Code automation and the Windows `.exe` wrappers; P3.11 the upstream PR notes | (c) for P3.11; the rest is ready |
-| P4 | P4.3 routing and readiness gate (needs P3); P4.4 Windows USN; P4.5 reindex loop; P4.6–P4.7 notifier | P3; the D13 review |
+| P1 | Ingest for Go, TS and Python (call-graph join, the Jelly union, name-match candidates); multi-language `codetags index`; the summary and drop check after every run (D33); trait expansion through `textDocument/implementation` (D31); P1.3b through tree-sitter, after a spike (D32) | ready |
+| P2 | `ViewFs`, renderers as built-in plugins, the tagma bridge, the materializer, `codetags q`/`show`, the eval harness (on codetags itself, D41) | The P2.1 review |
+| P3 | P3.12 the readiness gate; P3.13 live-test follow-ups; P3.6's configuration merge now includes the cross-session coordinator (D24); P3.4 routing-key injection, the minimal daemon environment and toolchain key (D27), and wrappers for gopls, pyright and the TS server; P3.5 the full fixed capability set; P3.6 configuration merge; P3.7 crash recovery; P3.8 the watcher client (gopls); P3.10 gopls, real VS Code automation and the Windows `.exe` wrappers; P3.11 the upstream PR notes, for you to write the PR from (D29) | ready |
+| P4 | notify 9.0.0-rc.5 (D35); P4.3 routing (needs P3.8); P4.4 Windows USN; P4.5 reindex loop; P4.6–P4.7 notifier; the helper's threat model (D40) | P3.8; the D13 review |
 | P5 | Live mounts over `ViewFs` (FUSE, NFS, WinFsp), with the S2 rule of bumping directory mtimes | P2.2 |
 | P6 | The tags file, the CLI, the overlay, the operation queue and guard, filesystem tagging | The P6.1 and D11/D12 reviews |
 | P7 | The plugin registry, the declarative runtime and sandbox, Mermaid | The P7.1 review |

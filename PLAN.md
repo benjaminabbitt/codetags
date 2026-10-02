@@ -82,6 +82,21 @@ of tagma's `PLAN.md`:
 | D24 | **All three configuration policies are in v1** (2026-10-01; P3 draft question 4): `Authority`, `Union` and `Strongest`. P3.6 therefore builds the cross-session coordinator that `Union` and `Strongest` need. | brief §4.2 `RouteKey`/`Union`/`Strongest`/`Authority`: none deferred |
 | D25 | **The P3.14 wiring scenarios are approved as drafted** (2026-10-01), including the two behaviour changes they propose: the sh wrapper checks that the shim can serve before using it, and `codetags doctor` reports an `lsp wiring:` line. | M3 |
 | D26 | **Supersedes D23: the shim canonicalizes the root, and rewrites URIs in both directions** (2026-10-01, on V132). The server is given the canonical project root. Each shim rewrites its own client's spelling to the canonical one in every message to the server, and back in every message to the client, so documents' URIs and the server's file watcher agree. On macOS, a checkout reached through a symlink otherwise never sees changes on disk (V132). | brief §4.2 "canonicalize the root", now as written |
+| D27 | **The lspmux daemon starts with a fixed, minimal environment** (2026-10-01; P3 draft question 7). Each shim resolves its session's toolchain and passes it explicitly through `pass_environment`: `RUSTUP_TOOLCHAIN`, `GOROOT`, the interpreter path. It also sets `CODETAGS_KEY_TOOLCHAIN`, so different toolchains get different instances and identical ones share. The daemon no longer inherits the environment of whichever session started it. | P3.4, D20, D21 |
+| D28 | **Multi-user Windows is out of v1** (2026-10-01; lspmux question b, C-3). On Windows, lspmux's loopback port lets other local users make the daemon run programs as you. That is accepted on single-user machines, and `codetags doctor` states it. | O-20 |
+| D29 | **The human writes the upstream lspmux PR** that forwards `workspace/applyEdit` and `window/showMessageRequest` to a client (2026-10-01; lspmux question c, C-1, C-2). It is written from the P3.11 notes and motivated by editor use. Until it merges, gopls's commands that use `applyEdit` don't work through the shim. | P3.11, P3.10 |
+| D30 | **CI runs the live Claude Code scenarios on every push** (2026-10-01). The human adds an `ANTHROPIC_API_KEY` repository secret. The `claude-client` job's expected-skip entries are removed in the same change that first runs with it. | P3.13, rule 11 |
+| D31 | **Rust trait and `dyn` calls reach their implementations through rust-analyzer's `textDocument/implementation`** (2026-10-01; V64). The Rust provider runs an implementation pass at index time, with a loaded rust-analyzer, using the warm shared one when the shim has it. The edges carry their provenance. | brief §4.4 Rust row: LSP instead of `is_implementation`, which rust-analyzer does not emit |
+| D32 | **P1.3b uses tree-sitter, gated by a spike** (2026-10-01). tree-sitter supplies only the syntax around each SCIP call site: the enclosing conditional, loop, `try` and `await`, and the call's string-literal arguments, joined to SCIP's sites by position. Names still come from SCIP. If the spike over the four fixtures runs into trouble, P1.3b uses each language's own tools instead (Python's `ast` in the site script, `go/ast` in `gocallgraph`). Transaction context waits for the framework rules. | brief §4.4 "control context" |
+| D33 | **Every `codetags index` run ends with a resolution summary and the drop check** (2026-10-01): one rate line per language, and the edge-count regression check against the previous generation, with a non-zero exit on a sudden drop. Per-module detail stays in `codetags report`. The reindex loop (P4.5) keeps the previous generation live on a drop. | brief §4.4 "after every run" |
+| D34 | **The naming defaults in §2.7 are approved as built** (2026-10-01; V96–V98). A name can change when a colliding item appears, which is accepted while symbols are not user-taggable (O-12). | none |
+| D35 | **notify is pinned at 9.0.0-rc.5** (2026-10-01; V56), a deliberate pre-release exception, and moves to 9.0 when it is stable. On Windows, 9.0 signals a rescan where 8.2 drops overflow silently or stops watching. | §4 notify row |
+| D36 | **A path element ending in an unquoted `.` or space is refused on every OS** (2026-10-01; S4, V50, V51). Such an element is written the tagma way (`~"billing."`). Native Windows tools strip a trailing `.` or space, which would silently turn the query into a different one; requiring quotes keeps paths portable. A bare `NUL` element is documented, not handled. | §2.7, D15 |
+| D37 | **The scip-python Windows patch stays** (2026-10-01; V104, upstream #210 and #224) until a fixed release ships; then it is deleted. | R2 |
+| D38 | **The Unlicense exceptions for `nfs3_types` and `nfs3_macros` are approved** (2026-10-01; V42), scoped to those crates under `codetags-mount-nfs`. | rule 12 |
+| D39 | **A per-item merge driver for the tags file** (2026-10-01; V70). `codetags tags merge %O %A %B` conflicts only when both sides changed the same item differently. The `.gitattributes` line is committed, and each clone opts in with `codetags tags setup-git`. Without it, git's line merge applies, which also conflicts on adjacent lines. | §2.3 |
+| D40 | **The privileged helper gets a threat-model document, signed off by the human, before anyone is told to install it** (2026-10-01). Until then, docs and `codetags doctor` do not suggest installing it. Writer PIDs from fanotify do not reach watcher batches in v1. | P4.4, D12 |
+| D41 | **The eval repo is codetags itself, at a pinned commit, with `PLAN.md`, `docs/` and `features/` stripped from the eval copy** (2026-10-01). | resolves brief §4.6 [OPEN] |
 
 ### 1.2 Consequences adopted by this plan (review these)
 
@@ -191,7 +206,7 @@ optional, admin-installed: codetags-privhelper (fanotify | USN journal) ─> eve
 - **What the watcher sees.** It excludes `.codetags/index/`, its own output. It does watch `tags` and `config.toml`, so a `git pull`, a checkout, or a hand edit reloads them.
 - **How `tags` is written.**
   - Rewritten atomically (temp file, then rename, with a retry on Windows sharing violations) while holding `tags.lock`.
-  - Lines are sorted, with the tags sorted within each line. Diffs stay minimal, and a merge conflicts only when both sides tagged the same item.
+  - Lines are sorted, with the tags sorted within each line, so diffs stay minimal. git's own line merge also conflicts when the two sides change adjacent lines (V70). The per-item merge driver (D39) conflicts only when both sides changed the same item differently.
 - **Line format** (*sketch*):
 
   ```text
@@ -262,7 +277,7 @@ Why the other candidates are not v1 backends:
   - Generics, `$`, `#` and the like stay as they are, e.g. `billing.Charge<T>.apply`.
   - Package paths containing `/` (Go, TS) are rendered dotted (`github.com.acme.billing`). The exact SCIP symbol stays in DuckDB, so a canonical name only needs to be unique; it is never decoded.
   - **Invariant:** no canonical name contains `/` or a control character. Two symbols with the same canonical name are a reported collision, never silently merged.
-  - **Defaults, pending review** (P1.3c, from dogfooding this repo; V96–V98):
+  - **Defaults, approved (D34)** (P1.3c, from dogfooding this repo; V96–V98):
     - **Impl blocks are containers.** rust-analyzer's symbol for an impl block itself (`impl#[Tree]`) has no canonical name, and is neither a `symbol` row nor a caller. Its methods keep `Type.method` and `Type.Trait.method`.
     - **Value-namespace suffixes.** Rust keeps types (modules, structs, enums, traits) and values (functions, consts, statics, fields) in separate namespaces. Only on a collision: a type keeps the plain name and each value gets its kind's suffix, `+fn`, `+field`, `+const` or `+static` (the function `checker()` beside the module `checker/` is `checker+fn`). With no type in the collision, a function keeps the plain name, so a getter's field is `export_path+field`. `+` and letters cannot be mistaken for `+N`. Two values of one kind that share a name are still a reported collision.
     - **Rust names start with the crate,** as Rust's full paths do: the SCIP package name with `-` mapped to `_` (`codetags_model.store.GenerationStore`; the crate root `crate/` is `codetags_model`), always, not only on a collision. Go, TypeScript and Python are unchanged: their descriptors already carry the import or module path.
@@ -278,7 +293,7 @@ Why the other candidates are not v1 backends:
   - The WinFsp backend decodes those code points back to ASCII on input and encodes them on output.
   - The Windows Tier 0 writer stores them the same way.
   - Agents in Git Bash or WSL therefore type and see the real characters. Native PowerShell and Explorer users see private-use glyphs and use the `codetags q` CLI instead.
-  - Device names (`CON`, `NUL`, …) and trailing `.` or space follow S4's findings.
+  - A trailing `.` or space must be quoted, on every OS (D36): native Windows tools strip them, which would silently change the query. Of the device names, only a bare `NUL` in a plain path is intercepted (V50). It is documented, not handled.
 - **Result groups** are directories whose names start with `@` (`@files/`, `@symbols/`, `@sites/`). `@` can never start a tagma token, so a result name can never be mistaken for a query element.
 - **Case-folding collisions.** When the materialized tree lands on a case-insensitive filesystem (APFS/NTFS default), only the colliding names get a deterministic suffix, `~<6 hex of id hash>`.
 
@@ -463,7 +478,7 @@ codetags/
 | fuser | 0.18 | V11 |
 | `nfsserve` or `nfs3_server` | chosen in spike S2 | V13 |
 | winfsp (winfsp-rs) | 0.13 (GPL-3.0, D9), features `full` | Chosen over `winfsp_wrs` (MIT), for reasons in V27 and V28:<br>• It builds without WinFsp installed, using its bundled import lib and headers. bindgen needs libclang on Windows build hosts ⚠.<br>• At runtime, `winfsp_link_delayload()` plus `winfsp_init()` give a graceful fallback.<br>• The `notify` feature gives real cache invalidation.<br>• It passes WinFsp's own test suite (through ntptfs).<br>• Risk: one main maintainer. Mitigation: the backend is confined to one crate, so swapping in `winfsp_wrs` is local work. |
-| notify | 8.x; 9.0 once it is stable | V17 |
+| notify | 9.0.0-rc.5 (D35), a pre-release exception; 9.0 when it is stable | V17, V56 |
 | interprocess | 2.4 | V15 |
 | minijinja | 2.x stable (3.0 is in alpha) | Template engine for declarative plugins; no loader, so no filesystem access |
 | SCIP bindings | pinned | Compare edge counts on every upgrade (brief §4.4) |
@@ -550,7 +565,7 @@ Because of D2, mount risk is retired early. Each spike:
 **Status (2026-10-01):** ◐
 - **Done:** P1.1 store; P1.2 names (D15); P1.3 ingest and `codetags index`, plus P1.3c's naming defaults (dogfood at 0 collisions); P1.4–P1.7 provider runners and fixtures on all three OSes; P1.8 the report and baselines.
 - **Remaining:** ingest for Go, TS and Python (call-graph join, Jelly union, name-match candidates), multi-language `codetags index`, and P1.3b (control context and literal names; needs a parser beyond SCIP).
-- **Waiting on a decision:** expanding Rust trait calls (V64).
+- **Decided:** trait and `dyn` calls through rust-analyzer's `textDocument/implementation` (D31); P1.3b through tree-sitter, after a spike (D32); a resolution summary and drop check after every run (D33).
 
 | ID | Tag | Task |
 |---|---|---|
@@ -568,7 +583,7 @@ Because of D2, mount risk is retired early. Each spike:
 
 ## 10. P2 — view core, static tree, CLI, evaluation
 
-**Status (2026-10-01):** ☐ The P2.1 and P7.1 drafts are in `docs/spec-drafts/` awaiting review, which gates P2.2 onward. The eval repo is still [OPEN].
+**Status (2026-10-01):** ☐ The P2.1 and P7.1 drafts are in `docs/spec-drafts/` awaiting review, which gates P2.2 onward. The eval repo is codetags itself, with its docs stripped (D41).
 
 | ID | Tag | Task |
 |---|---|---|
@@ -578,7 +593,7 @@ Because of D2, mount risk is retired early. Each spike:
 | P2.4 | CORE | tagma bridge: per-generation ingest (the brief's sketch plus `_config` meta tags) and `q/` evaluation through the path profile. Benchmark build and query on the largest fixture. |
 | P2.5 | CORE | Materializer (Tier 0) into the per-user views directory, read-only. Build a sibling directory, then rename with retry; the per-file headers make any mix of generations detectable. |
 | P2.6 | CORE | CLI: `codetags q <query>`, `codetags show <item>`, `codetags where`. |
-| P2.7 | SPEC | Evaluation harness for conditions A and B; C is wired up in P5.5. The eval repo is still the brief's [OPEN]. |
+| P2.7 | SPEC | Evaluation harness for conditions A and B; C is wired up in P5.5. The eval repo is codetags at a pinned commit, without `PLAN.md`, `docs/` and `features/` (D41). |
 
 **Done when:**
 
@@ -599,14 +614,14 @@ The design comes from `docs/proxy-zero-change.md`, the classification of every r
 | P3.1 | MECH | ✅ | Pin and install lspmux at `18861f9` (D19): `just setup-lspmux` installs into `.codetags/local`, and CI installs it for `@lspmux` scenarios. |
 | P3.2 | SPEC | ◐ | Proxy features: `features/lsp/shim.feature` (hermetic: fake server plus real lspmux), `record.feature`, `claude-client.feature`, and replays. **Remaining:** features for routing-key injection, crash recovery and configuration. |
 | P3.3 | CORE | ✅ | Test harness: a fake language server, scripted editor and agent sessions, and replay of recorded Claude Code sessions (`tests/fixtures/lsp/`). |
-| P3.4 | CORE | ◐ | Shim core, `codetags-lsp serve`. **Done:** non-LSP pass-through (`--version`, `scip`); roles; on-demand daemon (D21; no inherited handles on Windows, V125); relay through `lspmux client`; a session sending `shutdown` without `exit` only detaches (V121); the recorder flag. **Remaining:** routing-key injection (`CODETAGS_KEY_*`: toolchain, semantic configuration, host and filesystem, R9 and R11), and wrapper resolution for gopls, pyright and the TS server. |
+| P3.4 | CORE | ◐ | Shim core, `codetags-lsp serve`. **Done:** non-LSP pass-through (`--version`, `scip`); roles; on-demand daemon (D21; no inherited handles on Windows, V125); relay through `lspmux client`; a session sending `shutdown` without `exit` only detaches (V121); the recorder flag. **Remaining:** routing-key injection (`CODETAGS_KEY_*`: toolchain, semantic configuration, host and filesystem, R9 and R11), with the daemon started in a fixed, minimal environment and each shim passing its resolved toolchain (D27); and wrapper resolution for gopls, pyright and the TS server. |
 | P3.5 | CORE | ◐ | Rewriting `initialize`. **Done:** multi-root gets an LSP error; the root is the canonical project root, and every `file:` URI under it is rewritten between the client's spelling and the canonical one in both directions (D26, V133); the watched-files capability is removed, so rust-analyzer watches files itself (V122, V126). **Remaining:** the full fixed capability set (R15). Today the first session's capabilities apply to everyone, because lspmux caches `initialize`. |
 | P3.6 | CORE | ◐ | Session policy (D16). **Done:** the agent role drops document sync, and an agent answers `workspace/configuration` with `null`. **Remaining:** merging configuration across sessions (brief §4.2's `RouteKey`/`Union`/`Strongest`/`Authority`, all three policies in v1, D24, so this includes a cross-session coordinator); per-server exceptions (tsserver needs open files); answering cancellations locally (C-4). |
 | P3.7 | CORE | ☐ | Crash recovery (R39): detect the server's exit, fail in-flight requests, start a fresh client, replay. |
 | P3.8 | CORE | ☐ | The watcher as an lspmux client (stage 3). **Not needed for rust-analyzer** (V126). Needed for gopls and other servers that rely on the client to watch files. |
 | P3.9 | CORE | ✅ | `codetags lsp setup` writes the lspmux config (D20); `codetags doctor` checks the lspmux rev, config drift, and a loopback address or a socket in a 0700 directory (D17). `just lsp-setup` wires the Claude Code plugin `codetags-lsp@codetags-local` (D18) and this repo's `.vscode/settings.json` (D22). |
 | P3.10 | CORE | ◐ | Integration with real servers. **Done:** rust-analyzer through the shim, live with Claude Code (V120, V126). **Remaining:** gopls; real VS Code automation (scripted VS Code-style sessions only so far); checking that Windows starts the `.exe` wrappers (V119). |
-| P3.11 | SPEC | ☐ | Notes for the upstream PR on server requests lspmux never answers (`applyEdit`, `showMessageRequest`; they affect gopls, not rust-analyzer). A human writes the PR (lspmux question c). |
+| P3.11 | SPEC | ☐ | Notes for the upstream PR on server requests lspmux never answers (`applyEdit`, `showMessageRequest`; they affect gopls, not rust-analyzer). The human writes the PR from these notes (D29). |
 | P3.12 | CORE | ☐ | Readiness gate in the shim, moved from P4.3: agent requests wait for the server to be quiescent (rust-analyzer's `experimental/serverStatus`), with a bound. The live flake in V128, an early request racing indexing, is the evidence that it's needed. On this repo the window was over a minute, and the agent read the empty answer as "0 results" (V141), so the bound must allow for a real workspace's load. |
 | P3.13 | MECH | ◐ | Live-test follow-ups:<br>• ✅ confirm the unopened-file rule with one live run (V143);<br>• add a warm-up to "Definitions and references still answer through the shim" (V128);<br>• enable `claude-client` in CI once the human adds an `ANTHROPIC_API_KEY` secret, removing its expected-skip entries. |
 | P3.14 | SPEC | ✅ | Drive the M3 setup claim instead of trusting it (D25; `features/lsp/wiring.feature`, V131). The scenarios cover: `lsp-setup`'s own script in a scratch checkout; the committed wrappers started the way Claude Code and VS Code start them; one real rust-analyzer for both; V126's on-disk changes on all three OSes; and a visible fallback when setup is missing or stale. It proposes a wrapper check that the shim can serve, and an `lsp wiring:` line in `codetags doctor`. |
@@ -618,14 +633,14 @@ The design comes from `docs/proxy-zero-change.md`, the classification of every r
 **Status (2026-10-01):** ◐
 - **Done:** P4.1–P4.2 (the notify watcher and coalescer), and P4.4 on Linux (the fanotify helper, its privileged paths proven in CI).
 - **Remaining:** P4.3 routing (needs P3.8); P4.4 on Windows (USN journal); P4.5 the reindex loop; P4.6–P4.7 the notifier (D13 under review).
-- **Waiting on a decision:** Windows overflow (V56).
+- **Decided:** notify 9.0.0-rc.5 for Windows overflow (D35).
 
 | ID | Tag | Task |
 |---|---|---|
 | P4.1 | CORE | `codetags-watch` on notify: scan new directories to close the creation race; on Rescan, diff against the last snapshot; apply the brief's excludes plus `.codetags/index/`; give clear limit errors (the inotify sysctl, the Windows buffer). |
 | P4.2 | CORE | Coalescer: the brief's merge rule, a quiet window with a maximum-wait cap, and a pause while `.git/index.lock` exists. |
 | P4.3 | CORE | Route each batch to servers by registered globs ∧ the server's notifier filter (§2.12); the readiness gate moved to the shim (P3.12). |
-| P4.4 | CORE | Optional privhelper: fanotify on Linux, USN journal on Windows. It filters paths per user; the daemon logs which mode is active and falls back when the helper is absent. |
+| P4.4 | CORE | Optional privhelper: fanotify on Linux, USN journal on Windows. It filters paths per user; the daemon logs which mode is active and falls back when the helper is absent. Nobody is told to install it until its threat model is signed off (D40). |
 | P4.6 | SPEC | `features/watch/notify.feature`: the `fs:` facts, filter semantics, narrowing-only, and the per-server defaults. Human review. |
 | P4.7 | CORE | Change notifier (§2.12): per-batch event index, filters from config, built-in defaults for rust-analyzer, gopls, pyright and the TS server. |
 | P4.5 | CORE | Reindex loop in `codetagsd`: batch → affected providers → new generation → views swap. A change to the tags file reloads only the overlay. |
@@ -698,10 +713,9 @@ The design comes from `docs/proxy-zero-change.md`, the classification of every r
 - the full multi-root approach (§4.2);
 - a RouteKey change mid-session (§4.2);
 - framework rules (§4.4);
-- the eval repo (§4.6);
 - tagma `remove_item` (§4.5), now O-3.
 
-**Resolved by §1:** v1 platforms (D1); read-only views vs writes (D6).
+**Resolved by §1:** v1 platforms (D1); read-only views vs writes (D6); the eval repo (D41).
 
 | ID | Question | Default |
 |---|---|---|
