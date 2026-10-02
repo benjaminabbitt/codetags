@@ -340,6 +340,8 @@ Given the privileged helper is running with {string}
       # the same, with the string's words as extra arguments, e.g. "--queue 100000"
 Given the directory {string} in the project is readable only by root
       # sudo -n: created owned by root, mode 0700
+Given root creates the directory {string} in the project with mode {string}
+      # sudo -n install -d -m <mode>: owned by root, e.g. mode "711"
 Given a helper client is subscribed to the project
       # connects to the running helper, subscribes to the project directory,
       # and collects the events it sends

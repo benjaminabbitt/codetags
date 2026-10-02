@@ -33,7 +33,7 @@ use std::ffi::{CString, OsStr};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use codetags_watch::privhelper::proto::{read_frame, write_frame};
@@ -323,41 +323,71 @@ fn check_root(root: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-/// Opens the directory `dir` as the current user, without following a
-/// final symlink, and only if the user may list it: read and search
-/// permission on the directory opened, so the check and the identity are of
-/// the same object, whatever happens to the path afterwards.
-fn open_listable(dir: &Path) -> Option<OwnedFd> {
-    let flags = OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-    let fd = nix::fcntl::open(dir, flags, Mode::empty()).ok()?;
+/// How the checker opens each directory: no symlink followed, and only to
+/// name it, so that opening needs no permission on the directory itself.
+const DIR_FLAGS: OFlag = OFlag::O_PATH
+    .union(OFlag::O_DIRECTORY)
+    .union(OFlag::O_NOFOLLOW)
+    .union(OFlag::O_CLOEXEC);
+
+/// Whether the current user may list the open directory `fd`: read and
+/// search permission on that very directory, whatever its path now names.
+fn listable(fd: &OwnedFd) -> bool {
     nix::unistd::faccessat(
-        &fd,
+        fd,
         ".",
         AccessFlags::R_OK | AccessFlags::X_OK,
         AtFlags::AT_EACCESS,
     )
-    .ok()?;
+    .is_ok()
+}
+
+/// Opens the directory `dir`, at or below `root`, as the current user, and
+/// only if the user may list `root` and every directory from it down to
+/// `dir` (threat model F3): a path names an entry of each, so each must be
+/// one whose entries the user could read anyway. The walk goes from
+/// descriptor to descriptor (`openat` of one component, never following a
+/// symlink), so every check is of the directory actually reached, and the
+/// result is the directory the checks were made on (F1).
+///
+/// Cost: one `openat` and one `faccessat` per directory below the root, on
+/// top of the root's own two calls.
+fn open_listable_from(root: &Path, dir: &Path) -> Option<OwnedFd> {
+    let below = dir.strip_prefix(root).ok()?;
+    let mut fd = nix::fcntl::open(root, DIR_FLAGS, Mode::empty()).ok()?;
+    if !listable(&fd) {
+        return None;
+    }
+    for component in below.components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        fd = nix::fcntl::openat(&fd, name, DIR_FLAGS, Mode::empty()).ok()?;
+        if !listable(&fd) {
+            return None;
+        }
+    }
     Some(fd)
 }
 
 /// Answers a `P` request: `path` must be under `root`; the user must be able
-/// to list the directory that holds it (or, for the root itself, the root);
-/// and that directory must be the one the event came from (threat model
-/// F1). A name in a directory the user cannot list is never shown, and
-/// neither is a name whose path has since been pointed somewhere the user
-/// can list.
+/// to list the root and every directory from it down to the one that holds
+/// the path (for the root itself, the root); and that directory must be the
+/// one the event came from (threat model F1, F3). A name in a directory the
+/// user cannot list is never shown, nor is a name whose path has since been
+/// pointed somewhere the user can list.
 fn may_see(root: &Path, path: &Path, binding: Binding) -> bool {
     if !path.starts_with(root) {
         return false;
     }
     if path == root {
         let (Binding::Dir(id) | Binding::Entry(id)) = binding;
-        return open_listable(root).is_some_and(|fd| DirId::of(&fd).ok() == Some(id));
+        return open_listable_from(root, root).is_some_and(|fd| DirId::of(&fd).ok() == Some(id));
     }
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return false;
     };
-    let Some(fd) = open_listable(dir) else {
+    let Some(fd) = open_listable_from(root, dir) else {
         return false;
     };
     match binding {
@@ -523,6 +553,49 @@ mod tests {
         std::fs::rename(&open, &secret).unwrap();
         assert!(!may_see(&root, &secret.join("x"), recorded));
         assert!(may_see(&root, &root.join("moved/x"), recorded));
+    }
+
+    /// Threat model F3: a path names every directory between the root and
+    /// the event, so each must be listable, not merely searchable. A
+    /// traverse-only directory (0711) hides the names below it.
+    #[test]
+    fn every_directory_from_the_root_down_must_be_listable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let tunnel = root.join("tunnel");
+        let open = tunnel.join("open");
+        std::fs::create_dir_all(&open).unwrap();
+        std::fs::write(open.join("f"), "").unwrap();
+        let chmod = |mode| {
+            std::fs::set_permissions(&tunnel, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let entry = Binding::Entry(DirId::of_path(&open.join("f")).unwrap());
+        // Traverse-only for this user, who owns it: search, no read. (To
+        // anyone else, 0711 is the same; the privileged scenario uses that.)
+        chmod(0o311);
+        let (in_open, open_itself, entry_in_open) = (
+            may_see(&root, &open.join("x"), held_by(&open)),
+            may_see(&root, &open, held_by(&tunnel)),
+            may_see(&root, &open.join("f"), entry),
+        );
+        chmod(0o755);
+        // Root ignores permission bits, so the refusals only bite
+        // unprivileged.
+        if !Uid::effective().is_root() {
+            assert!(!in_open, "a name below a traverse-only directory was shown");
+            assert!(
+                !open_itself,
+                "a name in a traverse-only directory was shown"
+            );
+            assert!(
+                !entry_in_open,
+                "an object below a traverse-only directory was shown"
+            );
+        }
+        assert!(may_see(&root, &open.join("x"), held_by(&open)));
+        assert!(may_see(&root, &open, held_by(&tunnel)));
+        assert!(may_see(&root, &open.join("f"), entry));
     }
 
     /// An event naming an object, not an entry in a directory, is bound to

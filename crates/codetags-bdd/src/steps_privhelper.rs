@@ -344,6 +344,23 @@ mod unix {
         world.privhelper.notices = Some((rx, shutdown));
     }
 
+    #[given(expr = "root creates the directory {string} in the project with mode {string}")]
+    fn root_directory_with_mode(world: &mut CodetagsWorld, dir: String, mode: String) {
+        let path = world.watch.project().join(&dir);
+        sudo(&[
+            "install".as_ref(),
+            "-d".as_ref(),
+            "-m".as_ref(),
+            mode.as_ref(),
+            "-o".as_ref(),
+            "0".as_ref(),
+            "-g".as_ref(),
+            "0".as_ref(),
+            path.as_os_str(),
+        ]);
+        world.watch.root_owned.0.push(path);
+    }
+
     #[given("a helper client is subscribed to the project")]
     fn client_subscribed(world: &mut CodetagsWorld) {
         let client = subscribe_to_project(world);

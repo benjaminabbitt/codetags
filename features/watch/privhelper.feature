@@ -8,9 +8,9 @@ Feature: The privileged helper accelerates the watcher, and is never required
   and its batches are the same.
 
   The helper filters events per client. A client, identified by SO_PEERCRED,
-  receives an event only if it could list the directory holding the path,
-  checked as that client's user, never as root, and only if that directory is
-  still the one the event came from. So a root helper never shows one user
+  receives an event only if it could list every directory from its root down
+  to the one holding the path, checked as that client's user, never as root,
+  and only if that directory is still the one the event came from. So a root helper never shows one user
   another user's file names. Each client's share of the helper (connections,
   checker processes, subscriptions, queued events) is capped.
 
@@ -90,6 +90,22 @@ Feature: The privileged helper accelerates the watcher, and is never required
     And the helper client starts reading
     Then within 30 seconds the helper reports a write to "flood/f001.rs" by that process
     And the helper reported nothing under "secret"
+
+  @linux @privileged
+  Scenario: Names below a directory the client may search but not list are never delivered
+    Threat model F3. Root's "tunnel" lets others pass through but not list
+    it, so the client cannot learn the names in it. The directory below it
+    is listable, but its path would name "tunnel/open", so nothing from it
+    is delivered.
+    Given the privileged helper is running
+    And a project directory holding the files "src/lib.rs"
+    And root creates the directory "tunnel" in the project with mode "711"
+    And root creates the directory "tunnel/open" in the project with mode "755"
+    And a helper client is subscribed to the project
+    When root writes the file "tunnel/open/hidden.rs"
+    And another process writes the file "src/lib.rs"
+    Then within 10 seconds the helper reports a write to "src/lib.rs" by that process
+    And the helper reported nothing under "tunnel"
 
   @linux @privileged
   Scenario: The helper refuses to put its socket in a directory another user can change

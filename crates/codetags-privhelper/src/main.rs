@@ -43,8 +43,9 @@
 //!   that root cannot be regained, and makes itself non-dumpable before it
 //!   reads any request. A root is accepted only if the checker can list it;
 //!   it is canonicalized there, as the client. Every event is then sent only
-//!   if the checker can list the directory holding its path (for the root
-//!   itself, the root). So the kernel applies the permission bits, ACLs and
+//!   if the checker can list the root and every directory from it down to
+//!   the one holding the event's path, since the path names an entry in each
+//!   (for the root itself, the root). So the kernel applies the permission bits, ACLs and
 //!   LSM rules exactly as for the client. The aim is that a root helper never
 //!   shows one user another user's file names, even inside a root the client
 //!   owns; `docs/privhelper-threat-model.md` records where that still falls
@@ -53,8 +54,9 @@
 //!   the event's file handle before it is checked, and someone may rename
 //!   its directories in between. So the helper records the identity (device
 //!   and inode) of the directory the event came from, taken from the opened
-//!   handle, and the checker refuses the event unless the directory it opens
-//!   for the path, as the client, is that one (`checker::may_see`).
+//!   handle, and the checker refuses the event unless the directory it
+//!   reaches for the path, as the client, walking from the root one open
+//!   directory at a time, is that one (`checker::may_see`).
 //! - **What a client learns.** Paths it could list anyway, the kind of
 //!   change, and the writer's PID. PIDs are visible in `/proc` to every user
 //!   unless `/proc` is mounted with `hidepid`; on such a system, note that
