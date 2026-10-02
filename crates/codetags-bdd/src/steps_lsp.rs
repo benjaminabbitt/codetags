@@ -27,6 +27,11 @@ pub(crate) const STATUS_ENV: &str = "CODETAGS_BDD_FAKE_LSP_STATUS";
 /// server still runs under lspmux.
 pub(crate) const LOG_ENV: &str = "CODETAGS_BDD_FAKE_LSP_LOG";
 pub(crate) const MODE_ENV: &str = "CODETAGS_BDD_CHILD";
+/// Set to `1`, the fake server plays rust-analyzer's status (P3.12): it
+/// names itself `rust-analyzer`, reports itself not quiescent after
+/// `initialized` (if `initialize` asked for `experimental/serverStatus`),
+/// and quiescent once it receives a `fake/ready` notification.
+pub(crate) const LOADING_ENV: &str = "CODETAGS_BDD_FAKE_LSP_LOADING";
 
 /// What an `features/lsp` scenario set up and observed.
 #[derive(Debug, Default)]
@@ -273,7 +278,9 @@ const CONFIGURATION_ID: &str = "fake-configuration";
 /// `workspace/configuration` request it sends the client first. A
 /// `fake/echoUri` request sends a `fake/uriNotice` notification with
 /// `params.uri`, then answers `{"uri": …}`, both the request's
-/// `textDocument.uri`. With
+/// `textDocument.uri`. With [`LOADING_ENV`] set it reports its status as
+/// rust-analyzer does, logging `{"event":"status","quiescent":…}` for each
+/// report. With
 /// [`LOG_ENV`] set, it logs its start and each message as it arrives. It
 /// always exits with the status in [`STATUS_ENV`], after writing every byte
 /// it received and sent to the files in [`IN_ENV`] and [`OUT_ENV`], if set.
@@ -298,6 +305,15 @@ pub(crate) fn fake_server() -> ! {
     };
     // The `fake/askConfiguration` request waiting for the client's answer.
     let mut asking: Option<serde_json::Value> = None;
+    let loading = std::env::var_os(LOADING_ENV).is_some_and(|value| value == "1");
+    // Whether `initialize` asked for `experimental/serverStatus`.
+    let mut status_asked = false;
+    let report = |quiescent: bool| {
+        fake_log(serde_json::json!({"pid": pid, "event": "status", "quiescent": quiescent}));
+        let notice = serde_json::json!({"jsonrpc": "2.0", "method": "experimental/serverStatus",
+            "params": {"health": "ok", "quiescent": quiescent, "message": null}});
+        frame(PLAIN, &notice.to_string())
+    };
     while let Some(body) = fake_read(&mut stdin, &mut received) {
         let message: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
         fake_log(serde_json::json!({"pid": pid, "msg": message}));
@@ -307,11 +323,19 @@ pub(crate) fn fake_server() -> ! {
             .unwrap_or(serde_json::Value::Null);
         match message["method"].as_str() {
             Some("initialize") => {
+                status_asked = message
+                    .pointer("/params/capabilities/experimental/serverStatusNotification")
+                    == Some(&serde_json::Value::Bool(true));
+                let name = if loading {
+                    "rust-analyzer"
+                } else {
+                    "fake-lsp é"
+                };
                 send(
                     frame(
                         TYPE_FIRST,
                         &format!(
-                            r#"{{"jsonrpc":"2.0","id":{id},"result":{{"capabilities":{{}}, "serverInfo":{{"name":"fake-lsp é"}}}}}}"#
+                            r#"{{"jsonrpc":"2.0","id":{id},"result":{{"capabilities":{{}}, "serverInfo":{{"name":"{name}"}}}}}}"#
                         ),
                     ),
                     &mut sent,
@@ -332,6 +356,10 @@ pub(crate) fn fake_server() -> ! {
                 );
             }
             Some("exit") => break,
+            Some("initialized") if loading && status_asked => send(report(false), &mut sent),
+            Some("fake/ready") if loading && status_asked && id.is_null() => {
+                send(report(true), &mut sent)
+            }
             Some("fake/askConfiguration") if !id.is_null() => {
                 asking = Some(id);
                 send(

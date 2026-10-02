@@ -18,6 +18,7 @@ pub mod logpath;
 pub mod lspmux;
 pub mod message;
 pub mod policy;
+pub mod ready;
 pub mod record;
 pub mod root;
 pub mod serve;

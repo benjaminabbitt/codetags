@@ -15,7 +15,9 @@
 //! the shim waits for either, so an editor that kills it instead (Claude
 //! Code, V115) detaches nothing else.
 //!
-//! Not built yet: stage 3's watcher client, the readiness gate, configuration
+//! Agent sessions' requests pass through the readiness gate ([`ready`], P3.12).
+//!
+//! Not built yet: stage 3's watcher client, configuration
 //! merge (P3.6), and crash recovery beyond ending the session (P3.7).
 
 use std::ffi::OsString;
@@ -35,6 +37,7 @@ use crate::invocation::is_lsp_session;
 use crate::logpath;
 use crate::lspmux;
 use crate::policy::{self, FromClient, FromServer, Initialize, Role};
+use crate::ready;
 use crate::record::{self, Log};
 use crate::root::RootRule;
 use crate::tools;
@@ -62,6 +65,9 @@ pub struct Options {
     pub lsp_subcommands: Vec<String>,
     /// How to find the project root; by default from the server's name.
     pub root_rule: Option<RootRule>,
+    /// The readiness gate's bound in seconds ([`ready::timeout`]); by
+    /// default from the environment.
+    pub ready_timeout: Option<u64>,
 }
 
 /// How a `serve` run ended.
@@ -78,6 +84,7 @@ pub enum Outcome {
 pub fn run(options: &Options) -> Result<Outcome, String> {
     let server = tools::resolve(&options.server)
         .ok_or_else(|| format!("{} not found", options.server.display()))?;
+    let bound = ready::timeout(options.ready_timeout)?;
     if !is_lsp_session(&options.args, &options.lsp_subcommands) {
         return Command::new(&server)
             .args(&options.args)
@@ -139,6 +146,11 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
             rewrite,
         } => (message, root, rewrite),
     };
+    let mut message = message;
+    // P3.12: every shim asks for the server's status, since lspmux
+    // initializes the server with the first session's `initialize` (V151).
+    let client_asked_status = ready::request_status(&mut message);
+    let initialize_id = message.get("id").cloned().unwrap_or(Value::Null);
     let lspmux_binary = match &options.lspmux {
         Some(binary) => binary.clone(),
         None => tools::find_lspmux().ok_or(
@@ -154,6 +166,24 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
     }
     let address = lspmux::effective_connect(text.as_deref());
     daemon::ensure_running(&lspmux_binary, &address)?;
+    let mut key_env: Vec<(String, String)> = Vec::new();
+    if let Some(root) = &root {
+        key_env.push((
+            KEY_ROOT_ENV.to_string(),
+            root.to_string_lossy().into_owned(),
+        ));
+    }
+    let mark = ready::LoadingMark::new(
+        &daemon::state_dir(&address),
+        &instance_key(&server, &options.args, &key_env),
+    );
+    let gate = ready::Gate::new(
+        options.role == Role::Agent,
+        bound,
+        ready::GRACE,
+        Some(mark),
+        Instant::now(),
+    );
     let mut command = Command::new(&lspmux_binary);
     command
         .arg("client")
@@ -164,9 +194,7 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    if let Some(root) = &root {
-        command.env(KEY_ROOT_ENV, root);
-    }
+    command.envs(key_env.iter().map(|(name, value)| (name, value)));
     let mut child = command
         .spawn()
         .map_err(|error| format!("cannot start {} client: {error}", lspmux_binary.display()))?;
@@ -181,13 +209,38 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
         .and_then(|()| to_lspmux.flush())
         .map_err(|error| format!("writing to lspmux: {error}"))?;
     relay(
-        options.role,
-        rewrite,
+        Shared {
+            role: options.role,
+            rewrite,
+            gate,
+            initialize_id,
+            client_asked_status,
+            log,
+        },
         editor,
         child,
         (to_lspmux, from_lspmux),
-        log,
     )
+}
+
+/// The instance a session lands on, as text: lspmux keys an instance on the
+/// server, its arguments, the passed variables and the root (V3), which
+/// [`KEY_ROOT_ENV`] holds.
+fn instance_key(server: &std::path::Path, args: &[OsString], env: &[(String, String)]) -> String {
+    let mut key = server.to_string_lossy().into_owned();
+    for arg in args {
+        key.push('\0');
+        key.push_str(&arg.to_string_lossy());
+    }
+    let mut env = env.to_vec();
+    env.sort();
+    for (name, value) in env {
+        key.push('\0');
+        key.push_str(&name);
+        key.push('=');
+        key.push_str(&value);
+    }
+    key
 }
 
 /// Logs one message, if there is a log.
@@ -252,12 +305,30 @@ enum Event {
     LspmuxEnded,
 }
 
+/// What [`run`] hands the relay.
+struct Shared {
+    role: Role,
+    rewrite: Option<Rewrite>,
+    gate: ready::Gate,
+    /// The id of the client's `initialize`, to recognize its answer.
+    initialize_id: Value,
+    /// Whether the client asked for `experimental/serverStatus` itself.
+    client_asked_status: bool,
+    log: Option<Arc<Log>>,
+}
+
 /// Shared between the two relay directions.
 struct Session {
     role: Role,
     /// The client's spelling of the root and the canonical one, when they
     /// differ (D26).
     rewrite: Option<Rewrite>,
+    /// The readiness gate (P3.12). Held requests are written to lspmux, and
+    /// requests the gate passes too, while its lock is held, so they keep
+    /// their order.
+    gate: Mutex<ready::Gate>,
+    initialize_id: Value,
+    client_asked_status: bool,
     to_lspmux: Mutex<Option<ChildStdin>>,
     /// The id of the editor's `shutdown` request, once sent.
     shutdown_id: Mutex<Option<Value>>,
@@ -279,6 +350,51 @@ impl Session {
         }
     }
 
+    /// Runs `change` on the gate, then forwards what it released and logs
+    /// why, all under the gate's lock.
+    fn gate(&self, change: impl FnOnce(&mut ready::Gate) -> ready::Opened) {
+        let mut gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let opened = change(&mut gate);
+        for frame in &opened.frames {
+            self.to_lspmux(frame);
+        }
+        if let Some(note) = &opened.note {
+            self.gate_note(note);
+        }
+    }
+
+    /// Says what the gate did, on stderr and in the session log.
+    fn gate_note(&self, note: &str) {
+        eprintln!("codetags-lsp: {note}");
+        if let Some(log) = &self.log {
+            log.write(json!({"event": "gate", "note": note}));
+        }
+    }
+
+    /// Forwards a request from the client through the gate: held while it
+    /// is closed, else written now.
+    fn request_through_gate(&self, bytes: &[u8]) {
+        let mut gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let was_holding = gate.holding();
+        match gate.pass(bytes.to_vec(), Instant::now()) {
+            Some(bytes) => {
+                self.to_lspmux(&bytes);
+            }
+            None if was_holding == 0 => self.gate_note(&format!(
+                "readiness gate: holding requests until the server has loaded the workspace \
+                 (at most {}s)",
+                gate.timeout().as_secs()
+            )),
+            None => {}
+        }
+    }
+
     /// Closes lspmux's input, which ends this session's connection.
     fn close_lspmux(&self) {
         let mut guard = self
@@ -289,22 +405,36 @@ impl Session {
     }
 }
 
+/// How often the gate's clock advances (its grace period and bound).
+const GATE_TICK: Duration = Duration::from_millis(100);
+
 fn relay(
-    role: Role,
-    rewrite: Option<Rewrite>,
+    shared: Shared,
     editor: FrameReader<BufReader<io::Stdin>>,
     mut child: Child,
     (to_lspmux, from_lspmux): (ChildStdin, impl Read + Send + 'static),
-    log: Option<Arc<Log>>,
 ) -> Result<Outcome, String> {
     let session = Arc::new(Session {
-        role,
-        rewrite,
+        role: shared.role,
+        rewrite: shared.rewrite,
+        gate: Mutex::new(shared.gate),
+        initialize_id: shared.initialize_id,
+        client_asked_status: shared.client_asked_status,
         to_lspmux: Mutex::new(Some(to_lspmux)),
         shutdown_id: Mutex::new(None),
         shut_down: AtomicBool::new(false),
-        log,
+        log: shared.log,
     });
+    {
+        let session = Arc::clone(&session);
+        // Not joined: process exit ends it.
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(GATE_TICK);
+                session.gate(|gate| gate.tick(Instant::now()));
+            }
+        });
+    }
     let (events, received) = channel();
     {
         let session = Arc::clone(&session);
@@ -419,10 +549,25 @@ fn client_to_lspmux(
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(id.clone());
                 }
                 // lspmux gone: keep reading, so `exit` still ends the session.
-                match respelled(session, frame.body(), message.as_ref(), Rewrite::to_server) {
-                    Some(bytes) => session.to_lspmux(&bytes),
-                    None => session.to_lspmux(frame.raw()),
-                };
+                let respelled =
+                    respelled(session, frame.body(), message.as_ref(), Rewrite::to_server);
+                let bytes = respelled.as_deref().unwrap_or(frame.raw());
+                let is_request = message
+                    .as_ref()
+                    .is_some_and(|message| message.get("id").is_some_and(|id| !id.is_null()));
+                if method == Some("shutdown") {
+                    // Whatever is held goes first; lspmux answers `shutdown`
+                    // and detaches the session.
+                    session.gate(|gate| ready::Opened {
+                        frames: gate.release(),
+                        note: None,
+                    });
+                    session.to_lspmux(bytes);
+                } else if method.is_some() && is_request {
+                    session.request_through_gate(bytes);
+                } else {
+                    session.to_lspmux(bytes);
+                }
             }
         }
     }
@@ -444,6 +589,24 @@ fn lspmux_to_client(from_lspmux: impl Read, session: &Session, events: &Sender<E
             }
         };
         let message = serde_json::from_slice::<Value>(frame.body()).ok();
+        if let Some(message) = &message {
+            if is_response(message) && message.get("id") == Some(&session.initialize_id) {
+                let reports = ready::reports_status(message);
+                session.gate(|gate| gate.initialized(reports, Instant::now()));
+            } else if let Some(quiescent) = ready::quiescent(message) {
+                session.gate(|gate| gate.status(quiescent, Instant::now()));
+                if !session.client_asked_status {
+                    note(
+                        &session.log,
+                        "server",
+                        frame.body(),
+                        frame.headers(),
+                        Some("dropped: the client did not ask for the server's status (P3.12)"),
+                    );
+                    continue;
+                }
+            }
+        }
         let verdict = message.as_ref().map_or(FromServer::Forward, |message| {
             policy::from_server(session.role, message)
         });

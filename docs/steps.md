@@ -696,6 +696,39 @@ Then session {string} got the notification {string} naming {string} in the clien
       # file's URI as the session spells it
 ```
 
+The readiness gate (P3.12). The loading fake server plays rust-analyzer's
+status: its `initialize` answer names it `rust-analyzer`; after
+`initialized` it reports `experimental/serverStatus` with `quiescent: false`,
+and after a `fake/ready` notification `quiescent: true`, each only if the
+`initialize` it received asked for the status, and it logs each report.
+
+```gherkin
+Given a fake language server that reports loading until it is told it is ready
+When an {string} session {string} starts through codetags-lsp serve with a readiness bound of {int} second(s)
+      # as "starts through codetags-lsp serve", with --ready-timeout <n>
+When an {string} session {string} that asks for the server status starts through codetags-lsp serve
+      # its initialize has experimental.serverStatusNotification: true
+When session {string} sends the request {string} for {string} without waiting
+      # a request as in "asks", whose answer a later step waits for
+When the fake server has reported quiescence     # polls its log, up to 60 s
+When {int} seconds pass
+Then session {string} gets its answer to {string}
+      # waits up to 60 s for the answer to the request sent without waiting;
+      # it must be a result
+Then session {string} got its answer to {string} within {int} second(s)
+      # the time from sending an "asks" request to its answer
+Then session {string}'s stderr mentions {string}
+Then session {string} got the notification {string}   # waits up to 60 s
+Then session {string} got no notification {string}    # none within 2 s, nor earlier
+Then the fake server received {string} only after it reported quiescence
+      # in its log, the first such request comes after its first quiescent report
+Then the fake server never reported quiescence
+Then the fake server's initialize advertised {string}   # a dotted capability path, set to true
+```
+
+`session {string} sends {string} for {string}` also sends `fake/ready`, with
+empty params.
+
 URIs are compared percent-decoded, with a Windows drive letter in lower
 case, except in the "client's spelling" steps, which compare them exactly.
 

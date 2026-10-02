@@ -186,3 +186,72 @@ Feature: codetags-lsp serve shares one language server between sessions through 
     And the fake server received "textDocument/references" 1 time
     And the fake server received no document notifications
     And the fake server was started 1 time
+
+  # P3.12: the readiness gate. An agent's requests wait until the server
+  # reports itself quiescent (rust-analyzer's experimental/serverStatus,
+  # which the shim asks for in every initialize), at most for a bound. An
+  # agent cannot tell an answer given before the workspace loaded from a
+  # real one (V128, V141). Editors show progress themselves and are never
+  # held; notifications are never held.
+  @lspmux
+  Scenario: An agent's request waits until the server is quiescent
+    Given lspmux is set up in an isolated home
+    And a fake language server that reports loading until it is told it is ready
+    When an "agent" session "claude" starts through codetags-lsp serve
+    And session "claude" sends the request "textDocument/hover" for "src/lib.rs" without waiting
+    And session "claude" sends "fake/ready" for "src/lib.rs"
+    Then session "claude" gets its answer to "textDocument/hover"
+    And the fake server received "textDocument/hover" only after it reported quiescence
+    And the fake server's initialize advertised "experimental.serverStatusNotification"
+
+  @lspmux
+  Scenario: A held request is forwarded anyway when the bound expires
+    Given lspmux is set up in an isolated home
+    And a fake language server that reports loading until it is told it is ready
+    When an "agent" session "claude" starts through codetags-lsp serve with a readiness bound of 5 seconds
+    And session "claude" asks "textDocument/hover" for "src/lib.rs"
+    Then the fake server received "textDocument/hover" 1 time
+    And the fake server never reported quiescence
+    And session "claude"'s stderr mentions "not ready within the bound"
+
+  @lspmux
+  Scenario: A session joining a server that is already quiescent is not held
+    Given lspmux is set up in an isolated home
+    And a fake language server that reports loading until it is told it is ready
+    When an "editor" session "vscode" starts through codetags-lsp serve
+    And session "vscode" sends "fake/ready" for "src/lib.rs"
+    And the fake server has reported quiescence
+    And an "agent" session "claude" starts through codetags-lsp serve with a readiness bound of 60 seconds
+    And session "claude" asks "textDocument/hover" for "src/lib.rs"
+    Then session "claude" got its answer to "textDocument/hover" within 10 seconds
+
+  @lspmux
+  Scenario: A session joining a server that is still loading waits until it is quiescent
+    Given lspmux is set up in an isolated home
+    And a fake language server that reports loading until it is told it is ready
+    When an "editor" session "vscode" starts through codetags-lsp serve
+    And an "agent" session "claude" starts through codetags-lsp serve
+    And session "claude" sends the request "textDocument/hover" for "src/lib.rs" without waiting
+    And 4 seconds pass
+    And session "vscode" sends "fake/ready" for "src/lib.rs"
+    Then session "claude" gets its answer to "textDocument/hover"
+    And the fake server received "textDocument/hover" only after it reported quiescence
+
+  @lspmux
+  Scenario: An editor's requests are never held
+    Given lspmux is set up in an isolated home
+    And a fake language server that reports loading until it is told it is ready
+    When an "editor" session "vscode" starts through codetags-lsp serve
+    And session "vscode" asks "textDocument/hover" for "src/lib.rs"
+    Then the fake server received "textDocument/hover" 1 time
+    And the fake server never reported quiescence
+
+  @lspmux
+  Scenario: The server's status reaches only a client that asked for it
+    Given lspmux is set up in an isolated home
+    And a fake language server that reports loading until it is told it is ready
+    When an "editor" session "vscode" that asks for the server status starts through codetags-lsp serve
+    And an "agent" session "claude" starts through codetags-lsp serve
+    And session "vscode" sends "fake/ready" for "src/lib.rs"
+    Then session "vscode" got the notification "experimental/serverStatus"
+    And session "claude" got no notification "experimental/serverStatus"

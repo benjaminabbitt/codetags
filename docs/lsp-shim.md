@@ -120,6 +120,26 @@ shim):
   from disk (V120); and answers `workspace/configuration` itself with `null`
   per item, because lspmux may send it to any client and an agent refuses it,
   which would leave the server waiting (V5);
+- **the readiness gate** (P3.12, `codetags_lsp::ready`): an agent's
+  requests wait until the server has loaded the workspace, because an agent
+  reads an answer given before then ("No symbols found") as a fact (V128,
+  V141). Every shim adds `experimental.serverStatusNotification` to the
+  `initialize` it sends, since lspmux initializes the server with the first
+  one (V151), and rust-analyzer then reports `experimental/serverStatus`
+  whenever its status changes (V150). The shim passes those notifications on
+  only to a client that asked for them itself. For a server whose
+  `initialize` answer names it `rust-analyzer`, an agent's requests are held
+  until a status says `quiescent: true`, at most for the bound: 300 s by
+  default (V152), `--ready-timeout SECONDS` or `CODETAGS_LSP_READY_TIMEOUT`
+  to change it, 0 to turn the gate off. When the bound expires the held
+  requests go on anyway, and stderr says so. A session that joins a server
+  that has finished loading sees no status, since rust-analyzer reports only
+  changes, so after 2 s without one it checks a lock file in the daemon's
+  state directory (`ready-<hash>.lock`), which every shim that last saw that
+  server not quiescent holds shared; if none does, the session is not held.
+  A later "not quiescent" (a reload after `Cargo.toml` changes) closes the
+  gate again, with a new bound. Editors are never held, and notifications
+  and responses never are. `shutdown` releases whatever is held first;
 - `shutdown` is answered by lspmux, which detaches only this session (V121);
   the shim then waits for `exit` or to be killed, as Claude Code does (V115).
 
@@ -136,7 +156,10 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
 
 - **Stage 3:** the watcher as an extra lspmux client (R40-R42); until then
   servers watch for themselves. `TODO(stage 3)` in `codetags_lsp::policy`.
-- **The readiness gate** (R38, P3.12).
+- **Readiness for other servers:** the gate (P3.12) knows only
+  rust-analyzer's status. And if every session leaves while the server is
+  still loading, the next one to join sees neither a status nor a lock, and
+  is not held (V151).
 - **Configuration merge** (P3.6, R23, R34): an agent's shim answers `null`;
   `TODO(P3.6)` in `codetags_lsp::policy::from_server`.
 - **Crash recovery** (P3.7, R39): if lspmux's session ends unexpectedly the
@@ -159,7 +182,10 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
   process, the agent's dropped document messages, the editor's forwarded
   ones, `--version`, multi-root, the daemon on demand and started once, an
   agent killed without `exit`, root normalization to the canonical root with URIs rewritten both ways (through a symlink on Linux and macOS, and the identity everywhere), `workspace/configuration`,
-  a scripted VS Code-style session through a wrapper, and the recorded Claude
+  the readiness gate (an agent held until quiescence or the bound, a late
+  joiner to a ready or a loading server, editors never held, the status
+  passed on only to a client that asked), a scripted VS Code-style session
+  through a wrapper, and the recorded Claude
   Code session (`tests/fixtures/lsp`) replayed as the agent.
 - `features/lsp/wiring.feature` (`@lspmux @providers`, CI's `providers` job
   on all three OSes, P3.14, D25): §1 as a person runs it, in a scratch

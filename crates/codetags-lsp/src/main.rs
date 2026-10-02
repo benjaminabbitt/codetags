@@ -78,6 +78,11 @@ enum Command {
         /// rust-analyzer) or `client` (the root the client sent).
         #[arg(long, value_parser = parse_root_rule)]
         root: Option<codetags_lsp::root::RootRule>,
+        /// How long an agent's requests may wait for the server to finish
+        /// loading, in seconds (0: never wait); by default
+        /// $CODETAGS_LSP_READY_TIMEOUT, else 300.
+        #[arg(long, value_name = "SECONDS")]
+        ready_timeout: Option<u64>,
         /// Arguments for the server, after `--`.
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<OsString>,
@@ -150,6 +155,7 @@ fn main() -> ExitCode {
             log,
             lsp_subcommands,
             root,
+            ready_timeout,
             args,
         } => serve_exit(codetags_lsp::serve::run(&codetags_lsp::serve::Options {
             role,
@@ -159,6 +165,7 @@ fn main() -> ExitCode {
             log,
             lsp_subcommands,
             root_rule: root,
+            ready_timeout,
         })),
         Command::InstallWrapper {
             role,

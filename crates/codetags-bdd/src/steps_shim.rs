@@ -16,7 +16,7 @@ use cucumber::{given, then, when};
 use serde_json::{Value, json};
 
 use crate::CodetagsWorld;
-use crate::steps_lsp::{CHILD_MODE, LOG_ENV, MODE_ENV, STATUS_ENV, lsp_binary};
+use crate::steps_lsp::{CHILD_MODE, LOADING_ENV, LOG_ENV, MODE_ENV, STATUS_ENV, lsp_binary};
 use crate::steps_lspmux::{lspmux_binary, repo_root};
 
 /// How long a session may wait for one answer.
@@ -32,6 +32,10 @@ pub(crate) struct Session {
     pub(crate) seen: Vec<Value>,
     /// Answers by request method.
     pub(crate) answers: HashMap<String, Value>,
+    /// How long each answer took, by request method.
+    took: HashMap<String, Duration>,
+    /// Requests sent without waiting: their ids, by method.
+    pending: HashMap<String, Value>,
     next_id: i64,
     stderr: PathBuf,
 }
@@ -110,12 +114,40 @@ impl Session {
 
     /// Sends a request and waits for its answer.
     pub(crate) fn request(&mut self, method: &str, params: Value) -> Value {
+        let started = Instant::now();
+        let id = self.request_without_waiting(method, params);
+        self.pending.remove(method);
+        let answer = self.answer(&id);
+        self.took.insert(method.to_string(), started.elapsed());
+        self.answers.insert(method.to_string(), answer.clone());
+        answer
+    }
+
+    /// Sends a request and returns its id, without waiting for the answer.
+    fn request_without_waiting(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         let id = json!(self.next_id);
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
-        let answer = self.answer(&id);
-        self.answers.insert(method.to_string(), answer.clone());
-        answer
+        self.pending.insert(method.to_string(), id.clone());
+        id
+    }
+
+    /// Whether a notification `method` arrives within `wait` (or arrived
+    /// already, unclaimed).
+    fn has_notification(&mut self, method: &str, wait: Duration) -> bool {
+        let wanted = |message: &Value| message["method"] == method && message.get("id").is_none();
+        if self.seen.iter().any(wanted) {
+            return true;
+        }
+        let deadline = Instant::now() + wait;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.messages.recv_timeout(left) {
+                Ok(message) if wanted(&message) => return true,
+                Ok(message) => self.seen.push(message),
+                Err(_) => return false,
+            }
+        }
     }
 
     pub(crate) fn notify(&mut self, method: &str, params: Value) {
@@ -163,6 +195,9 @@ pub(crate) struct ShimState {
     wrappers: HashMap<String, PathBuf>,
     /// Exit codes of sessions that ended.
     exited: HashMap<String, Option<i32>>,
+    /// Whether the fake server reports its status as rust-analyzer does
+    /// (`LOADING_ENV`, P3.12).
+    loading: bool,
 }
 
 /// A `file:` URI for `path`, as an editor would write it.
@@ -283,11 +318,20 @@ fn a_cargo_workspace(world: &mut CodetagsWorld, member: String) {
 fn fake_env(world: &mut CodetagsWorld) -> Vec<(OsString, OsString)> {
     let log = world.scratch().join("fake-server.jsonl");
     world.shim.fake_log = Some(log.clone());
-    vec![
+    let mut env: Vec<(OsString, OsString)> = vec![
         (MODE_ENV.into(), CHILD_MODE.into()),
         (STATUS_ENV.into(), "0".into()),
         (LOG_ENV.into(), log.into()),
-    ]
+    ];
+    if world.shim.loading {
+        env.push((LOADING_ENV.into(), "1".into()));
+    }
+    env
+}
+
+#[given("a fake language server that reports loading until it is told it is ready")]
+fn a_loading_fake_server(world: &mut CodetagsWorld) {
+    world.shim.loading = true;
 }
 
 fn fake_server_path() -> PathBuf {
@@ -296,9 +340,21 @@ fn fake_server_path() -> PathBuf {
 
 /// `codetags-lsp serve --role ROLE --server <fake> --lspmux <lspmux>`.
 fn serve_command(world: &mut CodetagsWorld, role: &str, args: &[&str]) -> Command {
+    serve_command_with(world, role, &[], args)
+}
+
+/// [`serve_command`] with `options` added to `serve`'s own.
+fn serve_command_with(
+    world: &mut CodetagsWorld,
+    role: &str,
+    options: &[&str],
+    args: &[&str],
+) -> Command {
     let mut command = Command::new(lsp_binary());
     command
-        .args(["serve", "--role", role, "--server"])
+        .args(["serve", "--role", role])
+        .args(options)
+        .arg("--server")
         .arg(fake_server_path());
     if let Some(lspmux) = lspmux_binary() {
         command.arg("--lspmux").arg(lspmux);
@@ -356,6 +412,8 @@ pub(crate) fn spawn_session(
         messages,
         seen: Vec::new(),
         answers: HashMap::new(),
+        took: HashMap::new(),
+        pending: HashMap::new(),
         next_id: 1,
         stderr,
     }
@@ -418,9 +476,21 @@ pub(crate) fn handshake(session: &mut Session, message: &Value) {
 }
 
 fn start_session(world: &mut CodetagsWorld, role: &str, name: &str, root: &Path) -> Session {
-    let command = serve_command(world, role, &[]);
+    start_session_with(world, role, name, root, &[], json!({}))
+}
+
+/// [`start_session`] with `serve` options and client capabilities.
+fn start_session_with(
+    world: &mut CodetagsWorld,
+    role: &str,
+    name: &str,
+    root: &Path,
+    options: &[&str],
+    capabilities: Value,
+) -> Session {
+    let command = serve_command_with(world, role, options, &[]);
     let mut session = spawn_session(world, name, command);
-    handshake(&mut session, &initialize(name, root, json!({})));
+    handshake(&mut session, &initialize(name, root, capabilities));
     session
 }
 
@@ -428,6 +498,33 @@ fn start_session(world: &mut CodetagsWorld, role: &str, name: &str, root: &Path)
 fn a_session_starts(world: &mut CodetagsWorld, role: String, name: String) {
     let root = project(world);
     let session = start_session(world, &role, &name, &root);
+    world.shim.sessions.insert(name, session);
+}
+
+#[when(
+    expr = "an {string} session {string} starts through codetags-lsp serve with a readiness bound of {int} second(s)"
+)]
+fn a_session_starts_with_bound(world: &mut CodetagsWorld, role: String, name: String, bound: u64) {
+    let root = project(world);
+    let bound = bound.to_string();
+    let session = start_session_with(
+        world,
+        &role,
+        &name,
+        &root,
+        &["--ready-timeout", &bound],
+        json!({}),
+    );
+    world.shim.sessions.insert(name, session);
+}
+
+#[when(
+    expr = "an {string} session {string} that asks for the server status starts through codetags-lsp serve"
+)]
+fn a_session_asking_for_status_starts(world: &mut CodetagsWorld, role: String, name: String) {
+    let root = project(world);
+    let capabilities = json!({"experimental": {"serverStatusNotification": true}});
+    let session = start_session_with(world, &role, &name, &root, &[], capabilities);
     world.shim.sessions.insert(name, session);
 }
 
@@ -508,6 +605,8 @@ fn session_sends(world: &mut CodetagsWorld, name: String, method: String, file: 
         }
         "textDocument/didSave" | "textDocument/didClose" => json!({"textDocument": {"uri": uri}}),
         "workspace/didChangeWatchedFiles" => json!({"changes": [{"uri": uri, "type": 2}]}),
+        // The loading fake server's cue to report itself quiescent.
+        "fake/ready" => json!({}),
         other => panic!("no scripted notification {other:?}"),
     };
     session(world, &name).notify(&method, params);
@@ -518,6 +617,77 @@ fn session_asks(world: &mut CodetagsWorld, name: String, method: String, file: S
     let uri = document(world, &file);
     let params = json!({"textDocument": {"uri": uri}, "position": {"line": 0, "character": 7}});
     session(world, &name).request(&method, params);
+}
+
+#[when(expr = "session {string} sends the request {string} for {string} without waiting")]
+fn session_requests_without_waiting(
+    world: &mut CodetagsWorld,
+    name: String,
+    method: String,
+    file: String,
+) {
+    let uri = document(world, &file);
+    let params = json!({"textDocument": {"uri": uri}, "position": {"line": 0, "character": 7}});
+    session(world, &name).request_without_waiting(&method, params);
+}
+
+#[then(expr = "session {string} gets its answer to {string}")]
+fn session_gets_answer(world: &mut CodetagsWorld, name: String, method: String) {
+    let session = session(world, &name);
+    let id = session
+        .pending
+        .remove(&method)
+        .unwrap_or_else(|| panic!("session {name:?} sent no {method} without waiting"));
+    let answer = session.answer(&id);
+    assert!(
+        answer.get("result").is_some(),
+        "{method} was answered with {answer}\n{}",
+        session.diagnostics()
+    );
+    session.answers.insert(method, answer);
+}
+
+#[then(expr = "session {string} got its answer to {string} within {int} second(s)")]
+fn session_answered_within(world: &mut CodetagsWorld, name: String, method: String, limit: u64) {
+    let session = session(world, &name);
+    let took = *session
+        .took
+        .get(&method)
+        .unwrap_or_else(|| panic!("session {name:?} has no answer to {method}"));
+    assert!(
+        took <= Duration::from_secs(limit),
+        "{method} took {took:?}, more than {limit} s\n{}",
+        session.diagnostics()
+    );
+}
+
+#[when(expr = "{int} seconds pass")]
+fn seconds_pass(_world: &mut CodetagsWorld, seconds: u64) {
+    std::thread::sleep(Duration::from_secs(seconds));
+}
+
+#[then(expr = "session {string}'s stderr mentions {string}")]
+fn session_stderr_mentions(world: &mut CodetagsWorld, name: String, text: String) {
+    let session = session(world, &name);
+    let stderr = std::fs::read_to_string(&session.stderr).unwrap_or_default();
+    assert!(
+        stderr.contains(&text),
+        "session {name:?}'s stderr does not mention {text:?}:\n{stderr}"
+    );
+}
+
+#[then(expr = "session {string} got the notification {string}")]
+fn session_got_notification(world: &mut CodetagsWorld, name: String, method: String) {
+    session(world, &name).notification(&method);
+}
+
+#[then(expr = "session {string} got no notification {string}")]
+fn session_got_no_notification(world: &mut CodetagsWorld, name: String, method: String) {
+    let session = session(world, &name);
+    assert!(
+        !session.has_notification(&method, Duration::from_secs(2)),
+        "session {name:?} got a {method} notification"
+    );
 }
 
 #[when(expr = "session {string} shuts down and is killed without exit")]
@@ -654,6 +824,58 @@ fn fake_initialize_root(world: &mut CodetagsWorld) {
     assert_eq!(
         initialize["params"]["workspaceFolders"][0]["uri"],
         json!(uri),
+        "{initialize:#}"
+    );
+}
+
+/// Where in the fake server's log it first reported itself quiescent.
+fn quiescent_at(records: &[Value]) -> Option<usize> {
+    records
+        .iter()
+        .position(|record| record["event"] == "status" && record["quiescent"] == true)
+}
+
+#[when("the fake server has reported quiescence")]
+fn fake_has_reported_quiescence(world: &mut CodetagsWorld) {
+    let deadline = Instant::now() + ANSWER_TIMEOUT;
+    while quiescent_at(&fake_records(world)).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the fake server did not report quiescence within {ANSWER_TIMEOUT:?}: {:#?}",
+            fake_records(world)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[then(expr = "the fake server received {string} only after it reported quiescence")]
+fn fake_received_after_quiescence(world: &mut CodetagsWorld, method: String) {
+    let records = fake_records(world);
+    let quiescent = quiescent_at(&records)
+        .unwrap_or_else(|| panic!("the fake server never reported quiescence: {records:#?}"));
+    let first = records
+        .iter()
+        .position(|record| record["msg"]["method"] == method.as_str())
+        .unwrap_or_else(|| panic!("the fake server never received {method}: {records:#?}"));
+    assert!(
+        first > quiescent,
+        "the fake server received {method} before it reported quiescence: {records:#?}"
+    );
+}
+
+#[then("the fake server never reported quiescence")]
+fn fake_never_quiescent(world: &mut CodetagsWorld) {
+    let records = fake_records(world);
+    assert!(quiescent_at(&records).is_none(), "{records:#?}");
+}
+
+#[then(expr = "the fake server's initialize advertised {string}")]
+fn fake_initialize_has(world: &mut CodetagsWorld, path: String) {
+    let initialize = fake_initialize(world);
+    let pointer = format!("/params/capabilities/{}", path.replace('.', "/"));
+    assert_eq!(
+        initialize.pointer(&pointer),
+        Some(&json!(true)),
         "{initialize:#}"
     );
 }

@@ -123,6 +123,7 @@ pub fn run(exe: &Path, args: Vec<OsString>) -> Result<serve::Outcome, String> {
         log: settings.log,
         lsp_subcommands: Vec::new(),
         root_rule: None,
+        ready_timeout: None,
     })
 }
 
