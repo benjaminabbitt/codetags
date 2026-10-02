@@ -632,7 +632,7 @@ The design comes from `docs/proxy-zero-change.md`, the classification of every r
 **Status (2026-10-01):** ◐
 - **Done:** P4.1–P4.2 (the notify watcher and coalescer); P4.4 on Linux (the fanotify helper, its privileged paths proven in CI); D35, notify 9.0.0-rc.5, with a real Windows overflow reproduced and rescanned in CI (V170–V173).
 - **Remaining:** P4.3 routing (needs P3.8); P4.4 on Windows (USN journal); P4.5 the reindex loop; P4.6–P4.7 the notifier (D13 under review).
-- **In progress:** the helper's hardening and threat model for sign-off (D40).
+- **Hardened (D40):** a safe socket directory and the socket's mode set at creation (F2); resource caps; access checks bound to the event's directory (F1), with every directory from the root down listable (F3); the helper's unit tests run as root in CI (V175–V183). **Awaiting the human's sign-off:** `docs/privhelper-threat-model.md`. Until then nothing suggests installing the helper.
 
 | ID | Tag | Task |
 |---|---|---|

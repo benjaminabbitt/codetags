@@ -34,7 +34,7 @@ cross-job BDD coverage, unless a row says otherwise.
 - Add the `ANTHROPIC_API_KEY` repository secret (D30), then say so: the
   `claude-client` job's expected-skip entries go in the same change.
 - Write the upstream lspmux PR from `docs/upstream/lspmux-server-requests.md` (D29).
-- Sign off the privileged helper's threat model once its hardening lands (D40); it is in progress.
+- Sign off the privileged helper's threat model, `docs/privhelper-threat-model.md` (D40). The hardening has landed: F1–F3 are fixed, resource caps are built, and the unit tests run as root in CI. Its section 9 is the checklist.
 
 **Decisions:** none open. The 15 that were listed here were decided on
 2026-10-01 as D27–D41 (PLAN.md §1.1). The `p3-plan.md` draft is fully
