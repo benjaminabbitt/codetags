@@ -88,9 +88,11 @@ impl Client {
             socket: socket.to_path_buf(),
             source,
         })?;
-        stream
-            .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
-            .map_err(HelperError::Io)?;
+        // macOS fails this with EINVAL once the helper has hung up, as a
+        // helper over its connection limit does right after writing its
+        // refusal. The refusal is still there to read, and reads on a
+        // closed connection do not block, so the error is not fatal.
+        let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
         let mut client = Self {
             stream,
             socket: socket.to_path_buf(),
