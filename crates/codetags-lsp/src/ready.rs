@@ -21,10 +21,11 @@
 //! next status; otherwise it is ready.
 //!
 //! The bound ([`DEFAULT_TIMEOUT`], `--ready-timeout`,
-//! `CODETAGS_LSP_READY_TIMEOUT`) is measured from the server's `initialize`
-//! answer. When it expires the held requests are forwarded anyway, and the
-//! shim says so on stderr. A server that later reports itself busy again (a
-//! reload after a change on disk) closes the gate again, with a new bound.
+//! `CODETAGS_LSP_READY_TIMEOUT`) limits how long a request waits, from when
+//! the oldest held request arrived. When it expires the held requests are
+//! forwarded anyway, and the shim says so on stderr; the gate then stays open
+//! until the server is next quiescent. A server that later reports itself
+//! busy again (a reload after a change on disk) closes the gate again.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -255,18 +256,15 @@ impl Gate {
 
     /// Advances time to `now`: the grace period and the bound.
     pub fn tick(&mut self, now: Instant) -> Opened {
+        // The bound limits how long a request waits: it runs from when the
+        // oldest held request arrived. Before the server has answered
+        // `initialize` nothing could be answered anyway, however long that
+        // takes (a daemon starting on Windows), so it does not run then.
+        let waited_too_long = self
+            .held_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= self.timeout);
         match self.phase {
-            // The server cannot answer before its `initialize` is answered,
-            // however long that takes (a daemon starting on Windows), so the
-            // bound starts then.
-            Phase::Loading { since, .. }
-                if now.saturating_duration_since(since) >= self.timeout =>
-            {
-                self.time_out(now)
-            }
-            Phase::Unknown(since) if now.saturating_duration_since(since) >= self.timeout => {
-                self.time_out(now)
-            }
+            Phase::Loading { .. } | Phase::Unknown(_) if waited_too_long => self.time_out(now),
             Phase::Unknown(since) if now.saturating_duration_since(since) >= self.grace => {
                 let others = self.mark.as_ref().is_some_and(LoadingMark::others_loading);
                 if others {

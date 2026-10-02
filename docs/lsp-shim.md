@@ -167,7 +167,7 @@ shim):
   whenever its status changes (V150). The shim passes those notifications on
   only to a client that asked for them itself. For a server whose
   `initialize` answer names it `rust-analyzer`, an agent's requests are held
-  until a status says `quiescent: true`, at most for the bound: 300 s by
+  until a status says `quiescent: true`, each at most for the bound: 300 s by
   default (V152), `--ready-timeout SECONDS` or `CODETAGS_LSP_READY_TIMEOUT`
   to change it, 0 to turn the gate off. When the bound expires the held
   requests go on anyway, and stderr says so. A session that joins a server

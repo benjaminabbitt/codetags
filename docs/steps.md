@@ -705,7 +705,8 @@ and after a `fake/ready` notification `quiescent: true`, each only if the
 ```gherkin
 Given a fake language server that reports loading until it is told it is ready
 When an {string} session {string} starts through codetags-lsp serve with a readiness bound of {int} second(s)
-      # as "starts through codetags-lsp serve", with --ready-timeout <n>
+      # as "starts through codetags-lsp serve", with --ready-timeout <n>, and
+      # --log <name>.shim.jsonl in the scratch directory
 When an {string} session {string} that asks for the server status starts through codetags-lsp serve
       # its initialize has experimental.serverStatusNotification: true
 When session {string} sends the request {string} for {string} without waiting

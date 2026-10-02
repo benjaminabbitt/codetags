@@ -173,10 +173,17 @@ impl Session {
     }
 
     pub(crate) fn diagnostics(&self) -> String {
-        format!(
-            "session stderr:\n{}",
-            std::fs::read_to_string(&self.stderr).unwrap_or_default()
-        )
+        format!("session stderr:\n{}", read_lossy(&self.stderr))
+    }
+}
+
+/// A file's text, invalid UTF-8 replaced (a Windows error message in the
+/// ANSI code page, from lspmux, must not hide the rest), or why it could not
+/// be read.
+fn read_lossy(path: &Path) -> String {
+    match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => format!("<cannot read {}: {error}>", path.display()),
     }
 }
 
@@ -546,12 +553,14 @@ fn a_session_starts(world: &mut CodetagsWorld, role: String, name: String) {
 fn a_session_starts_with_bound(world: &mut CodetagsWorld, role: String, name: String, bound: u64) {
     let root = project(world);
     let bound = bound.to_string();
+    let log = world.scratch().join(format!("{name}.shim.jsonl"));
+    let log_text = log.to_string_lossy().into_owned();
     let session = start_session_with(
         world,
         &role,
         &name,
         &root,
-        &["--ready-timeout", &bound],
+        &["--ready-timeout", &bound, "--log", &log_text],
         json!({}),
     );
     world.shim.sessions.insert(name, session);
@@ -791,10 +800,12 @@ fn seconds_pass(_world: &mut CodetagsWorld, seconds: u64) {
 #[then(expr = "session {string}'s stderr mentions {string}")]
 fn session_stderr_mentions(world: &mut CodetagsWorld, name: String, text: String) {
     let session = session(world, &name);
-    let stderr = std::fs::read_to_string(&session.stderr).unwrap_or_default();
+    let stderr = read_lossy(&session.stderr);
+    let shim_log = session.stderr.with_file_name(format!("{name}.shim.jsonl"));
     assert!(
         stderr.contains(&text),
-        "session {name:?}'s stderr does not mention {text:?}:\n{stderr}"
+        "session {name:?}'s stderr does not mention {text:?}: {stderr:?}; its session log: {:?}",
+        read_lossy(&shim_log)
     );
 }
 
