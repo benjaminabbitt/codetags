@@ -3,13 +3,12 @@
 **Status: draft for the human's sign-off (PLAN.md D40). Not signed off.**
 Until this document is signed off, no doc, README or `codetags doctor`
 output suggests installing the helper. The two findings that blocked
-sign-off, F1 and F2, are fixed, and the denial-of-service limits are built
-(§6.1, §6.5). One finding made during that work, F3, is open; it is named
-here only by class, and the details went to the coordinator.
+sign-off, F1 and F2, are fixed, the denial-of-service limits are built, and
+F3, a finding made during that work, is fixed too (§6.1, §6.5).
 
 - **Scope:** the Linux fanotify helper (`crates/codetags-privhelper`) and its
   client in the watcher (`crates/codetags-watch/src/privhelper/`), at the
-  commit that hardens the helper (H1-H3). The Windows USN-journal helper is not built
+  commit that hardens the helper (H1-H3) and fixes F3. The Windows USN-journal helper is not built
   yet (P4.4 part 2). It needs its own section here before it ships.
 - **Reviewed:** the code itself, not only its doc comments. Every mitigation
   below names the function that implements it, and the test that covers it
@@ -101,7 +100,7 @@ risk, see §7), or *open* (blocks sign-off).
 |---|---|---|
 | F1 | **An access-check race (time-of-check to time-of-use) in per-event filtering.** The helper resolved an event's file handle to a path, and the client's checker later decided by that *path* whether the client could list the directory holding it. A user who can rename entries in a directory holding a directory they cannot list (for example, root's 0700 `secret/` inside the user's own project) could rename it away between the two, and make a directory they can list under the same name. The checker then approved the old path, and the user learned the names of entries in `secret/` (A2). Holding their connection unread made the window as long as they liked. | **fixed** (H3) |
 | F2 | **The socket setup trusted the directory it was in.** Root created the parent, removed a stale socket, bound, and then `chmod`ed the socket *by path*. In a directory another user could write, that user could swap the socket for a symlink between `bind` and `chmod` and have root make any file mode 0666 (A1). The default path (`/run/codetags/`, root-owned) and a systemd `RuntimeDirectory=` were not affected, but the helper did not refuse an unsafe location, and the BDD harness used one. | **fixed** (H1) |
-| F3 | **A name disclosure through directories the client may search but not list.** Found while fixing F1; details went to the coordinator. It needs a directory the client can search but not read inside a root the client can list, so it does not arise in an ordinary project tree. | **open** |
+| F3 | **A name disclosure through directories the client may search but not list.** Found while fixing F1. An event's path names an entry in *every* directory between the root and the event, but the checker required read permission only on the directory holding the path, and search permission (enough to reach it) on those above. With a traverse-only directory (for example root's 0711 `tunnel/`) inside a root the client can list, and a listable directory below it (`tunnel/open/`), an event in `tunnel/open/` revealed the name `open`, an entry of `tunnel/` that the client cannot list (A2). | **fixed** |
 
 **F1, how it is fixed.** The decision is bound to the object the event came
 from, not to its name. When `server::resolve` turns a handle into a path, it
@@ -112,11 +111,12 @@ opened, never from the path: `Binding::Dir` with the holding directory's
 itself (a `.` record, or a `FID` record on kernels before 5.9). An event on
 the root itself is bound to the root's open descriptor. The binding travels
 with the event (`server::Delivery::Event`) and in the `P` frame
-(`checker::path_request`). The checker, as the client, opens the holding
-directory with `O_PATH|O_DIRECTORY|O_NOFOLLOW`, checks read and search
-permission *on that descriptor* (`faccessat(fd, ".", R_OK|X_OK,
-AT_EACCESS)`, `checker::open_listable`), and answers yes only if its identity
-is the recorded one (for `Entry`, if the entry under the path's last name in
+(`checker::path_request`). The checker, as the client, reaches the holding
+directory with `O_PATH|O_DIRECTORY|O_NOFOLLOW` (since F3's fix, by walking
+down from the root, below), checks read and search permission *on that
+descriptor* (`faccessat(fd, ".", R_OK|X_OK, AT_EACCESS)`,
+`checker::listable`), and answers yes only if its identity is the recorded
+one (for `Entry`, if the entry under the path's last name in
 it is the recorded object, by `fstatat(..., AT_SYMLINK_NOFOLLOW)`). Anything
 else is a no (`checker::may_see`). A rename after the check does not matter:
 the name was in a directory the client could list when it was checked.
@@ -152,14 +152,47 @@ refused, root-owned 0755 `/` accepted, a file refused); in
 `a_stale_socket_is_replaced_but_a_live_one_is_not` and
 `a_non_socket_file_is_never_replaced`; and the privileged scenario "The
 helper refuses to put its socket in a directory another user can change",
-which runs it as root on the runner's scratch directory.
+which runs it as root on the runner's scratch directory. The unit tests
+also run as root in the `privileged-linux` job (`just test-privileged
+unit-as-root`), so the root-only branch of
+`socket::tests::a_root_owned_0755_directory_is_accepted` (a root-owned
+scratch directory) runs there (V180).
+
+**F3, how it is fixed.** An event may reveal a path's name components only
+where the client could list each directory holding them. The checker now
+reaches the holding directory by walking from the accepted root, one
+component at a time, from open descriptor to open descriptor (`openat(fd,
+name, O_PATH|O_DIRECTORY|O_NOFOLLOW)`, never following a symlink), and
+requires read and search permission on the root and on every directory it
+reaches (`checker::open_listable_from`, `checker::listable`). If any is
+missing, or a component is not a plain name, the event is refused. The H3
+binding is kept: the directory the walk ends on must have the recorded
+identity (`checker::may_see`). Because each step opens a child of the
+previous descriptor, all the checks are of one real chain of directories,
+whatever the path names by then. The same walk serves events on the root
+itself. Tests: `checker::tests::every_directory_from_the_root_down_must_be_listable`
+(a traverse-only directory between the root and a listable subdirectory
+refuses events in that subdirectory, an event naming the subdirectory, and
+an object in it; making the directory 0755 allows all three) and the
+privileged scenario "Names below a directory the client may search but not
+list are never delivered" (root's 0711 `tunnel/` and 0755 `tunnel/open/` in
+the runner's project; root's write in `tunnel/open/` is withheld). **Cost:**
+one `openat` and one `faccessat` (and a `close`) per directory below the
+root, measured at about 1 µs per level on the dev host, against about
+4.5 µs for the pipe round trip to the checker that every event already
+makes. An event five levels below the root costs about 5 µs more, so no
+cache is built (V181). A safe cache would key each directory's verdict on
+its `(st_dev, st_ino)` and its `st_ctime`, which changes on `chmod`,
+`chown` and ACL changes. But checking `st_ctime` needs an `fstatat` per
+level anyway, and LSM policy changes would not show in it, so it would save
+little and add a way to be wrong.
 
 ### 6.2 Confidentiality (A2, A3)
 
 | # | Threat | Mitigation | Code | Test | Status |
 |---|---|---|---|---|---|
 | C1 | A user subscribes to a directory they cannot list, such as another user's home directory, to see its events. | The root is checked **as the client**: the checker canonicalizes it and requires `R_OK\|X_OK` (`faccessat` with `AT_EACCESS`) on the directory. Otherwise the subscription is refused. | `checker::check_root`, `checker::can_list`, `server::read_requests` | `privhelper.feature`: "The helper refuses a root the client cannot read" (V90); `checker::tests::roots_must_be_absolute_listable_directories` | mitigated |
-| C2 | Inside a root the client can list, another user writes into a subdirectory the client cannot list. | Every event is checked as the client before it is sent: the path must be under the accepted root, the client must be able to list the directory that holds it, and that directory must be the one the event came from (F1). | `server::resolve`, `server::send_events` → `checker::Checker::may_see` → `checker::may_see` | `privhelper.feature`: "Paths the client cannot read are never delivered" (V90) and "A path renamed after its event is checked against the directory the event came from"; `checker::tests::a_path_is_seen_only_under_its_root_in_a_listable_directory`, `checker::tests::a_path_resolving_to_another_directory_is_refused` | mitigated (but see F3) |
+| C2 | Inside a root the client can list, another user writes into a subdirectory the client cannot list. | Every event is checked as the client before it is sent: the path must be under the accepted root, the client must be able to list every directory from the root down to the one that holds it (F3), and that directory must be the one the event came from (F1). | `server::resolve`, `server::send_events` → `checker::Checker::may_see` → `checker::may_see`, `checker::open_listable_from` | `privhelper.feature`: "Paths the client cannot read are never delivered" (V90), "A path renamed after its event is checked against the directory the event came from" and "Names below a directory the client may search but not list are never delivered"; `checker::tests::a_path_is_seen_only_under_its_root_in_a_listable_directory`, `checker::tests::a_path_resolving_to_another_directory_is_refused`, `checker::tests::every_directory_from_the_root_down_must_be_listable` | mitigated |
 | C3 | The filesystem mark covers the whole filesystem, so events outside every root reach the helper. | `dispatch` queues an event only for subscribers whose root is a prefix of its resolved path. The checker repeats that test. | `server::Registry::dispatch`, `checker::may_see` | `checker::tests::a_path_is_seen_only_under_its_root_in_a_listable_directory` (the `/etc/passwd` case) | mitigated |
 | C4 | Hostile names (T3), for example a name holding `/` or `..` as reported, try to make a resolved path escape its directory. | A `DFID_NAME` name is joined only if it is exactly one normal path component, or `.`. A path from `/proc/self/fd` that ends in ` (deleted)` or is not absolute is dropped. A file *named* `x (deleted)` is therefore never reported, which affects only availability. | `server::resolve`, `handle::path_of` | `handle::tests::path_of_reads_the_proc_link` | mitigated |
 | C5 | The checker is tricked into answering for the wrong user: wrong uid, groups kept, or root regained. | The checker gets its identity from `SO_PEERCRED` (set by the kernel at `connect`) and supplementary groups from `getgrouplist`. It calls `setgroups`, then `setresgid`, then `setresuid`, all three ids each. It verifies `getresuid`, checks that `setresuid(0,0,0)` now fails, and then becomes non-dumpable, all before it reads a request. If any step fails, the client is rejected. | `checker::Identity::of`, `checker::drop_privileges`, `checker::run` | `privhelper.feature` privileged scenarios, where the checker drops from root to the runner user (V90); `checker::tests::identities_round_trip_through_arguments`. Not tested directly: the regain-root refusal, and non-dumpability. | mitigated |
@@ -239,11 +272,13 @@ Stated plainly, with F1 and F2 fixed and the limits built:
    - `same_fs` assumes glibc's 64-bit `f_fsid` packing (or musl's 32-bit one).
 5. **Paths are names, not objects.** Since F1's fix, the per-event decision
    is bound to the identity of the directory or object the event came from,
-   and checked on a descriptor. What remains: identity is `(st_dev,
+   and since F3's fix every directory from the root down is checked on a
+   descriptor reached from its parent. What remains: identity is `(st_dev,
    st_ino)`, so a directory deleted and its inode number reused by a new
    directory between resolution and check would pass (the window is bounded
-   by the queue, and the deleter must be able to remove the original); and
-   F3 (open).
+   by the queue, and the deleter must be able to remove the original).
+   Ancestors *above* the root need only search permission, as for the root
+   at subscription: the client named the root itself.
 6. **No impersonation check on the client (I1).** It is safe at the default
    socket path. The helper refuses to listen in a directory other users can
    write (F2), but a client pointed there by `CODETAGS_PRIVHELPER_SOCKET`
@@ -283,8 +318,12 @@ The human signs off when every box is checked:
       opened directory with a umask and no `chmod` (`socket::bind`). Unit
       tests, the binary's tests and a privileged scenario cover it, and the
       BDD harness uses a root-owned 0755 directory (V175, V176, V179).
-- [ ] F3 (names through directories the client may search but not list)
-      fixed, or accepted with its conditions stated.
+- [x] F3 (names through directories the client may search but not list) is
+      fixed: every directory from the root down must be listable, checked
+      on a descriptor walk (`checker::open_listable_from`), with a unit test
+      and a privileged scenario (V181, V182).
+- [x] The helper's unit tests run as root in the `privileged-linux` job, so
+      their root-only branches run (V180).
 - [ ] §6 re-read against the code at the sign-off commit. Every mitigation
       still names the function that implements it.
 - [ ] Residual risk 1 (writer PIDs under `hidepid`) accepted, or the protocol
