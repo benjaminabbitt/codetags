@@ -138,6 +138,23 @@ fn the_text_report_lists_modules_languages_and_the_total() {
 }
 
 #[test]
+fn the_index_summary_is_one_line_per_language_then_the_regression() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index");
+    generation(&index, SITES);
+    let report = report(dir.path(), &index, &ReportOptions::default()).unwrap();
+    assert_eq!(
+        report.resolution_lines(),
+        "resolution python: 4 call sites, 2 resolved, 2 unresolved (unresolved rate 50.0%)\n\
+         resolution rust: 1 call sites, 1 resolved, 0 unresolved (unresolved rate 0.0%)\n"
+    );
+    assert_eq!(
+        report.regression_text(),
+        "edge counts: no previous generation to compare with\n"
+    );
+}
+
+#[test]
 fn a_drop_since_the_previous_generation_fails() {
     let dir = tempfile::tempdir().unwrap();
     let index = dir.path().join("index");
@@ -158,6 +175,7 @@ fn a_drop_since_the_previous_generation_fails() {
     let text = report.to_text();
     assert!(text.contains("p a.rs: 10 -> 4 edges"), "{text}");
     assert!(text.contains("likely a provider failure"), "{text}");
+    assert!(text.contains(&report.regression_text()), "{text}");
 }
 
 #[test]

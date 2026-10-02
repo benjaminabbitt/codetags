@@ -1,5 +1,7 @@
 //! The resolution report and the edge-count regression checks (brief §4.4,
-//! "Validation output"; PLAN.md §2.2, §9 P1.8): `codetags report`.
+//! "Validation output"; PLAN.md §2.2, §9 P1.8): `codetags report`, and the
+//! summary that ends every `codetags index` (PLAN.md D33:
+//! [`Report::resolution_lines`] and [`Report::regression_text`]).
 //!
 //! [`report`] reads one complete generation and never writes to it.
 //!

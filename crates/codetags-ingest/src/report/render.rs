@@ -91,7 +91,58 @@ impl Report {
         }
         rows.push(row("total", "", "", &self.total.0));
         out.push_str(&table(&rows));
+        out.push_str(&self.regression_text());
 
+        if let Some(baseline) = &self.baseline {
+            let path = baseline.path.display();
+            if baseline.differences.is_empty() {
+                let _ = writeln!(out, "baseline {path}: matches");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "baseline {path}: {} (- baseline, + this generation):",
+                    plural(baseline.differences.len(), "difference", "differences")
+                );
+                for difference in &baseline.differences {
+                    for (sign, count) in [("-", difference.expected), ("+", difference.found)] {
+                        if let Some(count) = count {
+                            let _ = writeln!(
+                                out,
+                                "{sign} {} {} {count}",
+                                difference.provider, difference.path
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// One resolution line per language, for the end of `codetags index`
+    /// (PLAN.md D33): its call sites, how many resolved and did not, and the
+    /// unresolved rate. Per-module detail is in [`Self::to_text`].
+    pub fn resolution_lines(&self) -> String {
+        let mut out = String::new();
+        for language in &self.languages {
+            let counts = &language.counts;
+            let _ = writeln!(
+                out,
+                "resolution {}: {} call sites, {} resolved, {} unresolved (unresolved rate {})",
+                language.language.as_deref().unwrap_or(UNKNOWN),
+                counts.call_sites,
+                counts.resolved,
+                counts.unresolved,
+                rate(counts)
+            );
+        }
+        out
+    }
+
+    /// The previous-generation check's result: one line, then one line per
+    /// file that dropped.
+    pub fn regression_text(&self) -> String {
+        let mut out = String::new();
         let regression = &self.regression;
         match regression.previous {
             None => out.push_str("edge counts: no previous generation to compare with\n"),
@@ -119,30 +170,6 @@ impl Report {
                         "  {} {}: {} -> {now} edges",
                         drop.provider, drop.path, drop.previous
                     );
-                }
-            }
-        }
-
-        if let Some(baseline) = &self.baseline {
-            let path = baseline.path.display();
-            if baseline.differences.is_empty() {
-                let _ = writeln!(out, "baseline {path}: matches");
-            } else {
-                let _ = writeln!(
-                    out,
-                    "baseline {path}: {} (- baseline, + this generation):",
-                    plural(baseline.differences.len(), "difference", "differences")
-                );
-                for difference in &baseline.differences {
-                    for (sign, count) in [("-", difference.expected), ("+", difference.found)] {
-                        if let Some(count) = count {
-                            let _ = writeln!(
-                                out,
-                                "{sign} {} {} {count}",
-                                difference.provider, difference.path
-                            );
-                        }
-                    }
                 }
             }
         }

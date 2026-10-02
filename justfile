@@ -205,8 +205,10 @@ doctor:
     bin="${CARGO_TARGET_DIR:-target}/debug"; if command -v cygpath >/dev/null 2>&1; then bin="$(cygpath -ua "$bin")"; else case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac; fi; PATH="$bin/deps:$PATH" "$bin/codetags" doctor
 
 # Indexes this repo with `codetags index --root .` (M1, D10) and prints the
-# summary. Fails if the index fails (any provider failure) or reports any
-# canonical-name collision. Builds and finds libduckdb as `doctor` does.
+# summary, which ends with a resolution line per language and the edge-count
+# check against the previous generation (D33). Fails if the index fails (any
+# provider failure, or a sudden edge-count drop since the previous generation)
+# or reports any canonical-name collision. Builds and finds libduckdb as `doctor` does.
 # Views are not refreshed yet: the materializer is P2.5.
 dogfood:
     cargo build --workspace --bins --quiet
