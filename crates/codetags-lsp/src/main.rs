@@ -83,6 +83,10 @@ enum Command {
         /// $CODETAGS_LSP_READY_TIMEOUT, else 300.
         #[arg(long, value_name = "SECONDS")]
         ready_timeout: Option<u64>,
+        /// How to find the session's toolchain, passed to the server:
+        /// `rust` (the default for rust-analyzer) or `none`.
+        #[arg(long, value_parser = parse_toolchain_rule)]
+        toolchain: Option<codetags_lsp::toolchain::ToolchainRule>,
         /// Arguments for the server, after `--`.
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<OsString>,
@@ -114,6 +118,16 @@ fn parse_root_rule(text: &str) -> Result<codetags_lsp::root::RootRule, String> {
         "client" => Ok(codetags_lsp::root::RootRule::Client),
         other => Err(format!(
             "unknown root rule {other:?}: expected cargo or client"
+        )),
+    }
+}
+
+fn parse_toolchain_rule(text: &str) -> Result<codetags_lsp::toolchain::ToolchainRule, String> {
+    match text {
+        "rust" => Ok(codetags_lsp::toolchain::ToolchainRule::Rust),
+        "none" => Ok(codetags_lsp::toolchain::ToolchainRule::None),
+        other => Err(format!(
+            "unknown toolchain rule {other:?}: expected rust or none"
         )),
     }
 }
@@ -156,8 +170,10 @@ fn main() -> ExitCode {
             lsp_subcommands,
             root,
             ready_timeout,
+            toolchain,
             args,
         } => serve_exit(codetags_lsp::serve::run(&codetags_lsp::serve::Options {
+            toolchain_rule: toolchain,
             role,
             server,
             args,

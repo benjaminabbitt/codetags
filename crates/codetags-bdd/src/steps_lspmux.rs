@@ -337,7 +337,7 @@ fn codetags_with_answer(world: &mut CodetagsWorld, args: String, answer: String)
 }
 
 /// lspmux's config file in the isolated home (`ProjectDirs` per OS, V116).
-fn config_file(world: &CodetagsWorld) -> PathBuf {
+pub(crate) fn config_file(world: &CodetagsWorld) -> PathBuf {
     let root = &home(world).root;
     if cfg!(windows) {
         root.join("AppData")

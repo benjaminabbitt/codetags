@@ -69,7 +69,7 @@ Feature: After lsp-setup, Claude Code and VS Code share one rust-analyzer
     Scenario: lsp-setup installs a shim that serves, and records this toolchain's rust-analyzer
       Then the scratch checkout's shim can serve
       And the scratch checkout's rust-analyzer path names this toolchain's rust-analyzer
-      And lspmux's config sets "pass_environment" to '["CODETAGS_KEY_*"]'
+      And lspmux's config sets "pass_environment" to '["CODETAGS_KEY_*", "RUSTUP_TOOLCHAIN", "RUSTC", "CARGO", "CARGO_HOME", "RUSTUP_HOME"]'
 
     # D25: doctor's "lsp wiring" line. Before it, doctor checked only
     # lspmux's binary and config, so it was green on a machine where neither

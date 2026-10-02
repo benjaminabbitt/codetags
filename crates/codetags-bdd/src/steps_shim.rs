@@ -318,6 +318,7 @@ fn a_cargo_workspace(world: &mut CodetagsWorld, member: String) {
 fn fake_env(world: &mut CodetagsWorld) -> Vec<(OsString, OsString)> {
     let log = world.scratch().join("fake-server.jsonl");
     world.shim.fake_log = Some(log.clone());
+    admit_fake_settings(world);
     let mut env: Vec<(OsString, OsString)> = vec![
         (MODE_ENV.into(), CHILD_MODE.into()),
         (STATUS_ENV.into(), "0".into()),
@@ -327,6 +328,44 @@ fn fake_env(world: &mut CodetagsWorld) -> Vec<(OsString, OsString)> {
         env.push((LOADING_ENV.into(), "1".into()));
     }
     env
+}
+
+/// What the fake server needs from the session beside the shim's own
+/// variables: its settings, and where the test executable finds libduckdb
+/// (cargo's library path; on Windows, `PATH`).
+const FAKE_PASSED: [&str; 4] = [
+    "CODETAGS_BDD_*",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+];
+
+/// The daemon starts with a minimal environment (D27), so the fake server's
+/// settings reach it only through `pass_environment`: the scenario's lspmux
+/// config, once `codetags lsp setup` wrote it, also admits [`FAKE_PASSED`]
+/// (and `PATH` on Windows).
+fn admit_fake_settings(world: &mut CodetagsWorld) {
+    if world.lspmux.home.is_none() {
+        return;
+    }
+    let path = crate::steps_lspmux::config_file(world);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    if text.contains("\"CODETAGS_BDD_*\"") {
+        return;
+    }
+    let mut names: Vec<&str> = FAKE_PASSED.to_vec();
+    if cfg!(windows) {
+        names.push("PATH");
+    }
+    let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\", ")).collect();
+    let admitted = text.replace(
+        "pass_environment = [",
+        &format!("pass_environment = [{}", quoted.concat()),
+    );
+    assert_ne!(admitted, text, "{} has no pass_environment", path.display());
+    std::fs::write(&path, admitted).expect("write lspmux's config");
 }
 
 #[given("a fake language server that reports loading until it is told it is ready")]
@@ -526,6 +565,89 @@ fn a_session_asking_for_status_starts(world: &mut CodetagsWorld, role: String, n
     let capabilities = json!({"experimental": {"serverStatusNotification": true}});
     let session = start_session_with(world, &role, &name, &root, &[], capabilities);
     world.shim.sessions.insert(name, session);
+}
+
+/// A fake Rust toolchain's sysroot, `toolchains/<name>` in the scratch
+/// directory, at its canonical path.
+fn fake_sysroot(world: &mut CodetagsWorld, name: &str) -> PathBuf {
+    let dir = canonical(world.scratch()).join("toolchains").join(name);
+    std::fs::create_dir_all(&dir).expect("create the fake sysroot");
+    dir
+}
+
+#[when(
+    expr = "an {string} session {string} with the Rust toolchain {string} starts through codetags-lsp serve"
+)]
+fn a_session_with_toolchain_starts(
+    world: &mut CodetagsWorld,
+    role: String,
+    name: String,
+    toolchain: String,
+) {
+    let root = project(world);
+    let sysroot = fake_sysroot(world, &toolchain);
+    let mut command = serve_command_with(world, &role, &["--toolchain", "rust"], &[]);
+    // `rustc` is the fake server, which prints this sysroot (D27).
+    command
+        .env("RUSTC", fake_server_path())
+        .env(crate::steps_lsp::SYSROOT_ENV, &sysroot);
+    let mut session = spawn_session(world, &name, command);
+    handshake(&mut session, &initialize(&name, &root, json!({})));
+    world.shim.sessions.insert(name, session);
+}
+
+#[when(
+    expr = "an {string} session {string} with the variable {string} set to {string} starts through codetags-lsp serve"
+)]
+fn a_session_with_variable_starts(
+    world: &mut CodetagsWorld,
+    role: String,
+    name: String,
+    variable: String,
+    value: String,
+) {
+    let root = project(world);
+    let mut command = serve_command(world, &role, &[]);
+    command.env(&variable, &value);
+    let mut session = spawn_session(world, &name, command);
+    handshake(&mut session, &initialize(&name, &root, json!({})));
+    world.shim.sessions.insert(name, session);
+}
+
+/// The environments the fake servers recorded as they started.
+fn started_envs(world: &CodetagsWorld) -> Vec<Value> {
+    fake_records(world)
+        .into_iter()
+        .filter(|record| record["event"] == "start")
+        .map(|record| record["env"].clone())
+        .collect()
+}
+
+#[then(expr = "a fake server was started with the Rust toolchain {string}")]
+fn fake_started_with_toolchain(world: &mut CodetagsWorld, toolchain: String) {
+    let sysroot = fake_sysroot(world, &toolchain);
+    let sysroot = sysroot.to_string_lossy();
+    let envs = started_envs(world);
+    assert!(
+        envs.iter()
+            .any(|env| env["RUSTUP_TOOLCHAIN"] == sysroot.as_ref()
+                && env["CODETAGS_KEY_TOOLCHAIN"] == format!("rust:{sysroot}")),
+        "no fake server was started with RUSTUP_TOOLCHAIN {sysroot}: {envs:#?}"
+    );
+}
+
+#[then(expr = "no fake server was started with {string}")]
+fn fake_started_without(world: &mut CodetagsWorld, variable: String) {
+    assert!(
+        crate::steps_lsp::REPORTED_ENV.contains(&variable.as_str()),
+        "the fake server does not record {variable}"
+    );
+    let envs = started_envs(world);
+    assert!(!envs.is_empty(), "no fake server was started");
+    assert!(
+        envs.iter().all(|env| env.get(&variable).is_none()),
+        "a fake server was started with {variable}: {envs:#?}"
+    );
 }
 
 #[when(expr = "an {string} session {string} starts through codetags-lsp serve in {string}")]

@@ -255,3 +255,36 @@ Feature: codetags-lsp serve shares one language server between sessions through 
     And session "vscode" sends "fake/ready" for "src/lib.rs"
     Then session "vscode" got the notification "experimental/serverStatus"
     And session "claude" got no notification "experimental/serverStatus"
+
+  # D27: the daemon starts with a fixed, minimal environment, and each shim
+  # passes its own session's toolchain, resolved in the project, through
+  # pass_environment, with CODETAGS_KEY_TOOLCHAIN naming it. lspmux keys
+  # instances on the passed variables, so toolchains split servers and
+  # nothing else of a session's environment does.
+  @lspmux
+  Scenario: Sessions with different Rust toolchains get different servers
+    Given lspmux is set up in an isolated home
+    And a fake language server
+    When an "agent" session "claude" with the Rust toolchain "toolchain-a" starts through codetags-lsp serve
+    And an "editor" session "vscode" with the Rust toolchain "toolchain-b" starts through codetags-lsp serve
+    Then the fake server was started 2 times
+    And a fake server was started with the Rust toolchain "toolchain-a"
+    And a fake server was started with the Rust toolchain "toolchain-b"
+
+  @lspmux
+  Scenario: Sessions with the same Rust toolchain share one server
+    Given lspmux is set up in an isolated home
+    And a fake language server
+    When an "agent" session "claude" with the Rust toolchain "toolchain-a" starts through codetags-lsp serve
+    And an "editor" session "vscode" with the Rust toolchain "toolchain-a" starts through codetags-lsp serve
+    Then the fake server was started 1 time
+    And a fake server was started with the Rust toolchain "toolchain-a"
+
+  @lspmux
+  Scenario: A variable only the session that started the daemon had does not reach the server
+    Given lspmux is set up in an isolated home
+    And a fake language server
+    And no lspmux daemon is answering
+    When an "agent" session "claude" with the variable "CODETAGS_TEST_FIRST_SESSION" set to "leak" starts through codetags-lsp serve
+    Then an lspmux daemon is answering
+    And no fake server was started with "CODETAGS_TEST_FIRST_SESSION"

@@ -23,6 +23,7 @@ pub mod record;
 pub mod root;
 pub mod serve;
 pub mod setup;
+pub mod toolchain;
 pub mod tools;
 pub mod uri;
 pub mod wiring;

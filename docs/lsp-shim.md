@@ -66,13 +66,22 @@ which lspmux reads from one fixed per-user path (V116). It writes:
   else `~/.local/state/codetags/…`); on Windows `127.0.0.1:27631` (D17).
   `--listen` takes another loopback address or socket path; anything else is
   refused;
-- `pass_environment = ["CODETAGS_KEY_*"]`: only the routing-key variables
-  the shim sets, never raw `PATH` (R8, R9);
+- `pass_environment = ["CODETAGS_KEY_*", "RUSTUP_TOOLCHAIN", "RUSTC",
+  "CARGO", "CARGO_HOME", "RUSTUP_HOME"]`: the routing-key variables and the
+  toolchain the shim resolves for its session (D27, below), never raw
+  `PATH` (R8, R9). lspmux keys instances on these, and a server gets them on
+  top of the daemon's environment;
 - `instance_timeout = 300`.
 
 It prints the difference from the current file, asks (`--yes` skips the
 question), and keeps the old file as `config.toml.bak-<UTC time>`. A running
 daemon keeps its old settings until it restarts.
+
+**After D27** (the toolchain variables in `pass_environment`), a config
+written before it is drift: `codetags doctor` fails on it, and `just
+lsp-setup` (or `codetags lsp setup`) rewrites it. A daemon started before
+D27 still has its starting session's environment; stop it (`pkill -f
+'lspmux server'` on Linux and macOS) and the next session starts a new one.
 
 **`codetags doctor`** reports lspmux's path and revision (from cargo's
 `.crates.toml`), whether the config is exactly what setup writes (drift
@@ -113,6 +122,35 @@ shim):
   shims never start two (D21, V117), with its log at `lspmux.log` beside the
   socket. On Windows the daemon inherits no handles (V125), so that log holds
   only the shim's start lines;
+- starts the daemon with a **fixed, minimal environment** (D27,
+  `codetags_lsp::daemon::minimal_env`), not the starting session's. It keeps
+  only the user's own directories, which locate lspmux's config file and
+  rust-analyzer's (`HOME`, `USER`, `LOGNAME`, `TMPDIR`, the `XDG_*`
+  directories), on Windows also the system's essentials and the profile
+  directories (`SystemRoot`, `windir`, `ComSpec`, `PATHEXT`, `USERPROFILE`,
+  `APPDATA`, `LOCALAPPDATA`, `ProgramFiles*`, `TEMP` and the like), and a
+  fixed `PATH`: `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`, or
+  `%SystemRoot%\System32` and its usual companions. A server's environment
+  is that plus what its shim passes, so nothing else of whichever session
+  started the daemon reaches any server (V155). **Consequence:** a build
+  script that needs a tool found only on a session's `PATH` (a Nix shell,
+  Homebrew on Apple silicon at `/opt/homebrew/bin`) does not find it when
+  rust-analyzer runs it;
+- **resolves its session's toolchain and passes it** (D27,
+  `codetags_lsp::toolchain`). For rust-analyzer (`--toolchain rust`, the
+  default for a server named so) it runs `rustc --print sysroot` (`$RUSTC`
+  if set, else `rustc` on the session's `PATH`) in the project root, so
+  `rust-toolchain.toml` and a session's `RUSTUP_TOOLCHAIN` apply, and passes
+  `RUSTUP_TOOLCHAIN=<sysroot>` (rustup takes a toolchain directory there,
+  V154), `RUSTC` and `CARGO` from the sysroot's `bin`, `CARGO_HOME` and
+  `RUSTUP_HOME` (set, or their defaults under `HOME`), and
+  `CODETAGS_KEY_TOOLCHAIN=rust:<sysroot>`. Those are the variables
+  rust-analyzer 1.96.1 uses to find its tools (V153). Each value depends
+  only on the toolchain, so sessions on one toolchain share a server and
+  sessions on two get two. A session's own values of these names, and any
+  `CODETAGS_KEY_*` it has, are removed from the `lspmux client` it runs.
+  If the toolchain cannot be resolved the shim says so on stderr and passes
+  none;
 - runs `lspmux client --server-path <server>` and relays the session through
   it message by message;
 - **agent role** (D16): drops the client's `textDocument/didOpen`,
@@ -166,8 +204,9 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
   shim exits, and the client restarts the server; `TODO(P3.7)` in
   `codetags_lsp::serve`.
 - Root rules for Go, TypeScript and Python (`TODO(P3.2)` in
-  `codetags_lsp::root`), and the `CODETAGS_KEY_TOOLCHAIN` and settings keys
-  (R9, R35).
+  `codetags_lsp::root`), their toolchains (`GOROOT`, the interpreter;
+  `TODO(P3.4)` in `codetags_lsp::toolchain`), and the settings key
+  (R35).
 - **Follow-ups:** automate a real VS Code session (only a scripted VS
   Code-style client is tested); check that VS Code and Claude Code on Windows
   start the `.exe` wrappers (V119).
@@ -180,7 +219,8 @@ built, since rust-analyzer sent none of the requests Claude Code refuses
   language server through the real lspmux (`@lspmux`, run by CI's `check`
   job on all three OSes after `just setup-lspmux`): sharing one server
   process, the agent's dropped document messages, the editor's forwarded
-  ones, `--version`, multi-root, the daemon on demand and started once, an
+  ones, `--version`, multi-root, the daemon on demand and started once, the
+  daemon's minimal environment and the toolchain split (D27), an
   agent killed without `exit`, root normalization to the canonical root with URIs rewritten both ways (through a symlink on Linux and macOS, and the identity everywhere), `workspace/configuration`,
   the readiness gate (an agent held until quiescence or the bound, a late
   joiner to a ready or a loading server, editors never held, the status

@@ -32,6 +32,20 @@ pub(crate) const MODE_ENV: &str = "CODETAGS_BDD_CHILD";
 /// `initialized` (if `initialize` asked for `experimental/serverStatus`),
 /// and quiescent once it receives a `fake/ready` notification.
 pub(crate) const LOADING_ENV: &str = "CODETAGS_BDD_FAKE_LSP_LOADING";
+/// The sysroot the fake server prints when run as `rustc --print sysroot`
+/// (D27). Deliberately outside `CODETAGS_BDD_*`, which the shim scenarios
+/// pass to the server: only the shim's own process sees it.
+pub(crate) const SYSROOT_ENV: &str = "CODETAGS_TEST_SYSROOT";
+/// The variables the fake server records in its start line, when set.
+pub(crate) const REPORTED_ENV: [&str; 7] = [
+    "CODETAGS_KEY_ROOT",
+    "CODETAGS_KEY_TOOLCHAIN",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC",
+    "CARGO",
+    "CODETAGS_TEST_FIRST_SESSION",
+    "PATH",
+];
 
 /// What an `features/lsp` scenario set up and observed.
 #[derive(Debug, Default)]
@@ -293,8 +307,22 @@ pub(crate) fn fake_server() -> ! {
         println!("fake-lsp 9.9.9");
         std::process::exit(status);
     }
+    // Run as `rustc --print sysroot` by the shim resolving the session's
+    // toolchain (D27): the scenario's fake sysroot.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--print", "sysroot"] {
+        println!(
+            "{}",
+            std::env::var(SYSROOT_ENV).expect("the scenario set a fake sysroot")
+        );
+        std::process::exit(0);
+    }
     let pid = std::process::id();
-    fake_log(serde_json::json!({"pid": pid, "event": "start"}));
+    let env: serde_json::Map<String, serde_json::Value> = REPORTED_ENV
+        .iter()
+        .filter_map(|name| Some((name.to_string(), std::env::var(name).ok()?.into())))
+        .collect();
+    fake_log(serde_json::json!({"pid": pid, "event": "start", "env": env}));
     let mut stdin = BufReader::new(std::io::stdin().lock());
     let mut stdout = std::io::stdout().lock();
     let (mut received, mut sent) = (Vec::new(), Vec::new());

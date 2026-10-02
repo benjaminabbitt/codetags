@@ -21,9 +21,19 @@ pub const DEFAULT_PORT: u16 = 27631;
 /// The idle timeout `codetags lsp setup` writes, in seconds (lspmux's
 /// default, written out so drift shows).
 pub const DEFAULT_INSTANCE_TIMEOUT: u32 = 300;
-/// The environment allowlist `codetags lsp setup` writes: only the routing-key
-/// variables the shim sets (R9, R11), never raw `PATH` (R8).
-pub const PASS_ENVIRONMENT: [&str; 1] = ["CODETAGS_KEY_*"];
+/// The environment allowlist `codetags lsp setup` writes: the routing-key
+/// variables the shim sets (R9, R11), and the toolchain it resolves for its
+/// session (D27, [`crate::toolchain::PASSED`]); never raw `PATH` (R8). The
+/// shim sets exactly these on its `lspmux client`, so a session's own values
+/// never reach the server.
+pub const PASS_ENVIRONMENT: [&str; 6] = [
+    "CODETAGS_KEY_*",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC",
+    "CARGO",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+];
 /// The socket's file name inside its private directory.
 pub const SOCKET_NAME: &str = "lspmux.sock";
 /// The keys lspmux's `Config` accepts (`deny_unknown_fields`).
@@ -391,9 +401,15 @@ mod tests {
         assert_eq!(effective.listen, address);
         assert_eq!(effective.connect, address);
         assert!(
-            text.contains("pass_environment = [\"CODETAGS_KEY_*\"]"),
+            text.contains(
+                "pass_environment = [\"CODETAGS_KEY_*\", \"RUSTUP_TOOLCHAIN\", \"RUSTC\", \
+                 \"CARGO\", \"CARGO_HOME\", \"RUSTUP_HOME\"]"
+            ),
             "{text}"
         );
+        for name in crate::toolchain::PASSED {
+            assert!(PASS_ENVIRONMENT.contains(&name), "{name} is not passed");
+        }
     }
 
     #[cfg(unix)]

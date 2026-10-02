@@ -16,6 +16,93 @@ use std::time::{Duration, Instant};
 
 use crate::lspmux::{self, Address};
 
+/// The variables the daemon keeps from the environment of the shim that
+/// starts it, on every OS (D27): the user's own directories, which locate
+/// lspmux's config file (V116, V123) and rust-analyzer's, and the temporary
+/// directory. They are the same for every session of one user.
+pub const KEPT_ENV: [&str; 9] = [
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+];
+
+/// The variables the daemon also keeps on Windows (D27): the system's
+/// essentials, which Windows programs and the MSVC toolchain's discovery
+/// expect, and the user's profile directories, which locate lspmux's config
+/// (V123).
+pub const KEPT_ENV_WINDOWS: [&str; 22] = [
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "OS",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "USERNAME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "TEMP",
+    "TMP",
+];
+
+/// The daemon's fixed `PATH` on Linux and macOS: the system's directories
+/// only, so no session's `PATH` decides which tools every server finds.
+/// Servers get their toolchain from the variables their shim passes
+/// ([`crate::toolchain`]).
+pub const FIXED_PATH_UNIX: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// The fixed, minimal environment the daemon starts with (D27), from
+/// `lookup` (this process's environment): [`KEPT_ENV`] (and on Windows
+/// [`KEPT_ENV_WINDOWS`]) where set, and a fixed `PATH`. Nothing else of the
+/// starting session reaches the daemon, or the servers it spawns.
+pub fn minimal_env(
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+    windows: bool,
+) -> Vec<(String, std::ffi::OsString)> {
+    let mut names: Vec<&str> = KEPT_ENV.to_vec();
+    if windows {
+        names.extend(KEPT_ENV_WINDOWS);
+    }
+    let mut env: Vec<(String, std::ffi::OsString)> = names
+        .into_iter()
+        .filter_map(|name| lookup(name).map(|value| (name.to_string(), value)))
+        .collect();
+    let path = if windows {
+        let root = lookup("SystemRoot").map_or_else(
+            || r"C:\Windows".to_string(),
+            |root| root.to_string_lossy().into_owned(),
+        );
+        format!(
+            r"{root}\System32;{root};{root}\System32\Wbem;{root}\System32\WindowsPowerShell\v1.0"
+        )
+    } else {
+        FIXED_PATH_UNIX.to_string()
+    };
+    env.push(("PATH".to_string(), path.into()));
+    env
+}
+
+/// [`minimal_env`] for this process on this OS.
+pub fn daemon_env() -> Vec<(String, std::ffi::OsString)> {
+    minimal_env(|name| std::env::var_os(name), cfg!(windows))
+}
+
 /// How long a started daemon may take to answer.
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// The line the shim appends to the daemon's log each time it starts one.
@@ -158,15 +245,17 @@ struct Detached {
 }
 
 /// Starts `lspmux server` so it outlives this process and its session, with
-/// its stderr appended to `log`. On Unix it gets its own process group, so
-/// the editor's signals to its group miss it; Rust closes every other
-/// descriptor in the child.
+/// its stderr appended to `log`, and the environment [`daemon_env`]. On
+/// Unix it gets its own process group, so the editor's signals to its group
+/// miss it; Rust closes every other descriptor in the child.
 #[cfg(unix)]
 fn spawn_detached(lspmux_binary: &Path, log: &std::fs::File) -> std::io::Result<Detached> {
     use std::os::unix::process::CommandExt;
 
     let child = Command::new(lspmux_binary)
         .arg("server")
+        .env_clear()
+        .envs(daemon_env())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log.try_clone()?)
@@ -186,10 +275,32 @@ fn spawn_detached(lspmux_binary: &Path, log: &std::fs::File) -> std::io::Result<
 /// inherited handles at all, detached and in its own process group, and out
 /// of the editor's job object when the job allows it. It has no standard
 /// handles, so its own log output is lost; the start line still goes to the
-/// log. Its environment is this process's.
+/// log. Its environment is [`daemon_env`].
 #[cfg(windows)]
 fn spawn_detached(lspmux_binary: &Path, _log: &std::fs::File) -> std::io::Result<Detached> {
-    windows_spawn::detached(lspmux_binary, "server").map(|pid| Detached { pid, child: None })
+    windows_spawn::detached(lspmux_binary, "server", &daemon_env())
+        .map(|pid| Detached { pid, child: None })
+}
+
+/// A Windows environment block for `env`: `NAME=VALUE` entries in UTF-16,
+/// sorted by name ignoring case, as `CreateProcessW` expects, each ended by
+/// a NUL, and the block by one more.
+pub fn environment_block(env: &[(String, std::ffi::OsString)]) -> Vec<u16> {
+    let mut entries: Vec<String> = env
+        .iter()
+        .map(|(name, value)| format!("{name}={}", value.to_string_lossy()))
+        .collect();
+    entries.sort_by_key(|entry| entry.to_uppercase());
+    let mut block: Vec<u16> = Vec::new();
+    for entry in entries {
+        block.extend(entry.encode_utf16());
+        block.push(0);
+    }
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    block
 }
 
 /// Neither Unix nor Windows: a plain spawn.
@@ -197,6 +308,8 @@ fn spawn_detached(lspmux_binary: &Path, _log: &std::fs::File) -> std::io::Result
 fn spawn_detached(lspmux_binary: &Path, log: &std::fs::File) -> std::io::Result<Detached> {
     let child = Command::new(lspmux_binary)
         .arg("server")
+        .env_clear()
+        .envs(daemon_env())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log.try_clone()?)
@@ -218,13 +331,19 @@ mod windows_spawn {
 
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
-        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CreateProcessW, DETACHED_PROCESS,
-        PROCESS_INFORMATION, STARTUPINFOW,
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_UNICODE_ENVIRONMENT,
+        CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION, STARTUPINFOW,
     };
     use windows::core::{PCWSTR, PWSTR};
 
-    /// Starts `program argument` detached, inheriting no handles; its pid.
-    pub(super) fn detached(program: &Path, argument: &str) -> std::io::Result<u32> {
+    /// Starts `program argument` detached, inheriting no handles, with the
+    /// environment `env` only; its pid.
+    pub(super) fn detached(
+        program: &Path,
+        argument: &str,
+        env: &[(String, std::ffi::OsString)],
+    ) -> std::io::Result<u32> {
+        let environment = super::environment_block(env);
         let wide = |text: &std::ffi::OsStr| -> Vec<u16> { text.encode_wide().chain([0]).collect() };
         let application = wide(program.as_os_str());
         // The program's path quoted (no quotes can occur in a Windows path),
@@ -235,13 +354,15 @@ mod windows_spawn {
             cb: u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(u32::MAX),
             ..Default::default()
         };
-        let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
         let mut last = None;
         for flags in [flags | CREATE_BREAKAWAY_FROM_JOB, flags] {
             let mut info = PROCESS_INFORMATION::default();
             // SAFETY: every pointer is to a live, NUL-terminated buffer or
             // struct owned by this frame; `command_line` is mutable, as the
-            // call requires; no handles are inherited.
+            // call requires; `environment` is a double-NUL-terminated UTF-16
+            // block, as CREATE_UNICODE_ENVIRONMENT says; no handles are
+            // inherited.
             let created = unsafe {
                 CreateProcessW(
                     PCWSTR(application.as_ptr()),
@@ -250,7 +371,7 @@ mod windows_spawn {
                     None,
                     false,
                     flags,
-                    None,
+                    Some(environment.as_ptr().cast()),
                     PCWSTR::null(),
                     &startup,
                     &mut info,
@@ -274,5 +395,61 @@ mod windows_spawn {
             || "CreateProcessW failed".to_string(),
             |error| error.to_string(),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::*;
+
+    fn lookup(name: &str) -> Option<OsString> {
+        match name {
+            "HOME" => Some("/home/u".into()),
+            "XDG_CONFIG_HOME" => Some("/home/u/.config".into()),
+            "SystemRoot" => Some(r"D:\Win".into()),
+            "APPDATA" => Some(r"D:\u\AppData\Roaming".into()),
+            // A session's own: never kept.
+            "PATH" => Some("/session/bin".into()),
+            "RUSTUP_TOOLCHAIN" => Some("nightly".into()),
+            "CODETAGS_TEST_FIRST_SESSION" => Some("leak".into()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_daemon_keeps_only_the_users_directories_and_a_fixed_path() {
+        let env = minimal_env(lookup, false);
+        let names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, vec!["HOME", "XDG_CONFIG_HOME", "PATH"]);
+        assert_eq!(env[2].1, OsString::from(FIXED_PATH_UNIX));
+    }
+
+    #[test]
+    fn on_windows_it_keeps_the_system_essentials_and_a_path_under_system_root() {
+        let env = minimal_env(lookup, true);
+        let get = |wanted: &str| {
+            env.iter()
+                .find(|(name, _)| name == wanted)
+                .map(|(_, value)| value.to_string_lossy().into_owned())
+        };
+        assert_eq!(get("SystemRoot").as_deref(), Some(r"D:\Win"));
+        assert_eq!(get("APPDATA").as_deref(), Some(r"D:\u\AppData\Roaming"));
+        assert!(
+            get("PATH").is_some_and(|path| path.starts_with(r"D:\Win\System32;D:\Win;")),
+            "{env:?}"
+        );
+        assert_eq!(get("RUSTUP_TOOLCHAIN"), None);
+        assert_eq!(get("CODETAGS_TEST_FIRST_SESSION"), None);
+    }
+
+    #[test]
+    fn environment_blocks_are_sorted_and_double_nul_terminated() {
+        let block =
+            environment_block(&[("b".to_string(), "2".into()), ("A".to_string(), "1".into())]);
+        let text = String::from_utf16_lossy(&block);
+        assert_eq!(text, "A=1\0b=2\0\0");
+        assert_eq!(environment_block(&[]), vec![0, 0]);
     }
 }

@@ -62,7 +62,7 @@ for local_dir in ${CLAUDE_PROJECT_DIR:+"$CLAUDE_PROJECT_DIR/.codetags/local"} "$
         export XDG_CONFIG_HOME
     fi
     if [ -n "${CODETAGS_LSP_LOG_DIR:-}" ]; then
-        exec "$shim" serve --role "$role" --lspmux "$lspmux" --root cargo \
+        exec "$shim" serve --role "$role" --lspmux "$lspmux" --root cargo --toolchain rust \
             --log "$CODETAGS_LSP_LOG_DIR/lsp-{ts}-{pid}.jsonl" \
             --server "$shim" --lsp-subcommand record \
             -- record --server "$server" --log "$CODETAGS_LSP_LOG_DIR/server-{ts}-{pid}.jsonl" -- "$@"

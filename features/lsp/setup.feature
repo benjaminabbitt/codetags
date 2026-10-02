@@ -15,7 +15,7 @@ Feature: codetags lsp setup writes lspmux's configuration, and doctor checks it
     When codetags is run with "lsp setup --yes"
     Then it exits with status 0
     And lspmux's config listens on a socket in a private directory
-    And lspmux's config sets "pass_environment" to '["CODETAGS_KEY_*"]'
+    And lspmux's config sets "pass_environment" to '["CODETAGS_KEY_*", "RUSTUP_TOOLCHAIN", "RUSTC", "CARGO", "CARGO_HOME", "RUSTUP_HOME"]'
     And lspmux's config sets "instance_timeout" to '300'
 
   @windows
@@ -25,7 +25,7 @@ Feature: codetags lsp setup writes lspmux's configuration, and doctor checks it
     Then it exits with status 0
     And lspmux's config sets "listen" to '["127.0.0.1", 27631]'
     And lspmux's config sets "connect" to '["127.0.0.1", 27631]'
-    And lspmux's config sets "pass_environment" to '["CODETAGS_KEY_*"]'
+    And lspmux's config sets "pass_environment" to '["CODETAGS_KEY_*", "RUSTUP_TOOLCHAIN", "RUSTC", "CARGO", "CARGO_HOME", "RUSTUP_HOME"]'
     And lspmux's config sets "instance_timeout" to '300'
 
   Scenario: Setup backs up a different config and shows the difference

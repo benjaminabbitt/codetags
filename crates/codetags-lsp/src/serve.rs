@@ -6,9 +6,9 @@
 //! Otherwise it reads the client's `initialize`, refuses a multi-root one
 //! with an LSP error, and rewrites the rest ([`policy::prepare_initialize`]);
 //! makes sure an lspmux daemon answers ([`daemon::ensure_running`]); runs
-//! `lspmux client --server-path <server>`, with the routing-key variable
-//! `CODETAGS_KEY_ROOT` set; and relays the session through it, message by
-//! message, applying the role's rules ([`policy`]).
+//! `lspmux client --server-path <server>`, passing only the routing keys and
+//! the session's toolchain ([`toolchain`], D27); and relays the session
+//! through it, message by message, applying the role's rules ([`policy`]).
 //!
 //! The session ends with the editor's `exit` or end of input; after
 //! `shutdown`, which lspmux answers itself by detaching this session only,
@@ -40,6 +40,7 @@ use crate::policy::{self, FromClient, FromServer, Initialize, Role};
 use crate::ready;
 use crate::record::{self, Log};
 use crate::root::RootRule;
+use crate::toolchain::{self, ToolchainRule};
 use crate::tools;
 use crate::uri::{self, Rewrite};
 
@@ -68,6 +69,9 @@ pub struct Options {
     /// The readiness gate's bound in seconds ([`ready::timeout`]); by
     /// default from the environment.
     pub ready_timeout: Option<u64>,
+    /// How to find the session's toolchain (D27); by default from the
+    /// server's name.
+    pub toolchain_rule: Option<ToolchainRule>,
 }
 
 /// How a `serve` run ended.
@@ -166,12 +170,23 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
     }
     let address = lspmux::effective_connect(text.as_deref());
     daemon::ensure_running(&lspmux_binary, &address)?;
-    let mut key_env: Vec<(String, String)> = Vec::new();
+    // What reaches the server beside the daemon's minimal environment (D27):
+    // the routing keys and the session's resolved toolchain, nothing else.
+    let mut key_env: Vec<(String, OsString)> = Vec::new();
     if let Some(root) = &root {
-        key_env.push((
-            KEY_ROOT_ENV.to_string(),
-            root.to_string_lossy().into_owned(),
-        ));
+        key_env.push((KEY_ROOT_ENV.to_string(), root.as_os_str().into()));
+    }
+    let toolchain_rule = options
+        .toolchain_rule
+        .unwrap_or_else(|| ToolchainRule::for_server(&server));
+    if let Some(project) = root.clone().or_else(|| std::env::current_dir().ok()) {
+        match toolchain::resolve(toolchain_rule, &project) {
+            Ok(variables) => key_env.extend(variables),
+            Err(error) => eprintln!(
+                "codetags-lsp: cannot resolve the session's toolchain ({error}); \
+                 the server gets none from this session"
+            ),
+        }
     }
     let mark = ready::LoadingMark::new(
         &daemon::state_dir(&address),
@@ -194,6 +209,13 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    // A session's own values of the passed names never reach lspmux.
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with("CODETAGS_KEY_") || toolchain::PASSED.contains(&text.as_ref()) {
+            command.env_remove(&name);
+        }
+    }
     command.envs(key_env.iter().map(|(name, value)| (name, value)));
     let mut child = command
         .spawn()
@@ -226,7 +248,7 @@ pub fn run(options: &Options) -> Result<Outcome, String> {
 /// The instance a session lands on, as text: lspmux keys an instance on the
 /// server, its arguments, the passed variables and the root (V3), which
 /// [`KEY_ROOT_ENV`] holds.
-fn instance_key(server: &std::path::Path, args: &[OsString], env: &[(String, String)]) -> String {
+fn instance_key(server: &std::path::Path, args: &[OsString], env: &[(String, OsString)]) -> String {
     let mut key = server.to_string_lossy().into_owned();
     for arg in args {
         key.push('\0');
@@ -238,7 +260,7 @@ fn instance_key(server: &std::path::Path, args: &[OsString], env: &[(String, Str
         key.push('\0');
         key.push_str(&name);
         key.push('=');
-        key.push_str(&value);
+        key.push_str(&value.to_string_lossy());
     }
     key
 }

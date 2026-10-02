@@ -729,6 +729,29 @@ Then the fake server's initialize advertised {string}   # a dotted capability pa
 `session {string} sends {string} for {string}` also sends `fake/ready`, with
 empty params.
 
+The daemon's environment (D27). The lspmux daemon starts with a minimal
+environment, so a session's variables reach the fake server only through
+`pass_environment`: the first session a scenario starts adds
+`CODETAGS_BDD_*`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` and
+`DYLD_FALLBACK_LIBRARY_PATH` (on Windows also `PATH`, where the test
+executable finds libduckdb) to the scenario's lspmux config. The fake
+server records `CODETAGS_KEY_ROOT`, `CODETAGS_KEY_TOOLCHAIN`,
+`RUSTUP_TOOLCHAIN`, `RUSTC`, `CARGO`, `CODETAGS_TEST_FIRST_SESSION` and
+`PATH` in its start line, when set. Run as `rustc --print sysroot`, it
+prints `$CODETAGS_TEST_SYSROOT`.
+
+```gherkin
+When an {string} session {string} with the Rust toolchain {string} starts through codetags-lsp serve
+      # --toolchain rust, with RUSTC the fake server and the fake sysroot
+      # toolchains/<name> in the scratch directory
+When an {string} session {string} with the variable {string} set to {string} starts through codetags-lsp serve
+      # the variable set in that shim's environment only
+Then a fake server was started with the Rust toolchain {string}
+      # RUSTUP_TOOLCHAIN is the fake sysroot, and CODETAGS_KEY_TOOLCHAIN
+      # is rust:<the sysroot>
+Then no fake server was started with {string}   # a variable the fake server records
+```
+
 URIs are compared percent-decoded, with a Windows drive letter in lower
 case, except in the "client's spelling" steps, which compare them exactly.
 
