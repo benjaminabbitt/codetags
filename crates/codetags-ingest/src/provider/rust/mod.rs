@@ -4,6 +4,11 @@
 //! in `rust-toolchain.toml` (`providers.toml`, V62). The runner starts the
 //! program by name, so on a rustup install the proxy picks the toolchain from
 //! the current directory, as cargo does.
+//!
+//! [`implementations`] runs the same rust-analyzer as a language server, to
+//! expand trait and `dyn` calls to their implementations (PLAN.md D31).
+
+pub mod implementations;
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -17,6 +22,10 @@ pub const INDEX_FILE: &str = "index.scip";
 
 /// The provider's name in a generation's `run` table.
 pub const PROVIDER: &str = "rust-analyzer scip";
+
+/// The implementation pass's name in a generation's `run` table, and the
+/// `method` of the call targets it writes (PLAN.md D31).
+pub const IMPL_PROVIDER: &str = "rust-analyzer lsp-impl";
 
 /// Runs `rust-analyzer scip`.
 #[derive(Debug, Clone)]

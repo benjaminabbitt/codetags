@@ -15,12 +15,45 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use codetags_ingest::project::{IndexOptions, index_project};
+use codetags_ingest::provider::rust::IMPL_PROVIDER;
 use codetags_ingest::report::{ReportOptions, report};
 
+/// Overrides how many seconds the Rust implementation pass waits for
+/// rust-analyzer to load the workspace (PLAN.md D31).
+pub const LOAD_TIMEOUT_ENV: &str = "CODETAGS_RUST_ANALYZER_LOAD_TIMEOUT";
+
+/// `n` and the noun for it, e.g. "1 call site" or "3 call sites".
+fn plural(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The options, with [`LOAD_TIMEOUT_ENV`] applied; an error names a value
+/// that is not a whole number of seconds.
+fn options() -> Result<IndexOptions, String> {
+    let mut options = IndexOptions::default();
+    if let Some(value) = std::env::var_os(LOAD_TIMEOUT_ENV) {
+        let text = value.to_string_lossy();
+        let seconds: u64 = text
+            .trim()
+            .parse()
+            .map_err(|_| format!("{LOAD_TIMEOUT_ENV}={text:?} is not a whole number of seconds"))?;
+        options.rust_analyzer_load_timeout = Duration::from_secs(seconds);
+    }
+    Ok(options)
+}
+
 pub fn run(root: &Path) -> ExitCode {
-    let summary = match index_project(root, &IndexOptions::default()) {
+    let options = match options() {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("codetags index: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let summary = match index_project(root, &options) {
         Ok(summary) => summary,
         Err(error) => {
             eprintln!("codetags index: {error}");
@@ -47,6 +80,29 @@ pub fn run(root: &Path) -> ExitCode {
         println!("  canonical-name collisions: {}", report.collisions.len());
         for collision in &report.collisions {
             println!("    {}: {}", collision.name, collision.symbols.join(", "));
+        }
+        match &run.implementations {
+            Some(expansion) => {
+                println!(
+                    "{IMPL_PROVIDER}: {}, {}, {} on {}",
+                    plural(expansion.trait_methods, "called trait method"),
+                    plural(expansion.implementations, "implementation"),
+                    plural(expansion.targets, "call target"),
+                    plural(expansion.sites, "call site"),
+                );
+                println!(
+                    "  rust-analyzer loaded the workspace in {:.1} s and answered in {:.1} s; \
+                     answers outside the project: {}; answers matching no definition: {}",
+                    expansion.load_time.as_secs_f64(),
+                    expansion.answer_time.as_secs_f64(),
+                    expansion.outside_root,
+                    expansion.unmapped.len()
+                );
+            }
+            None if run.provider == codetags_ingest::project::Provider::Rust => {
+                println!("{IMPL_PROVIDER}: no call of a trait method of the project; not run");
+            }
+            None => {}
         }
     }
     if !summary.gc.removed.is_empty() {

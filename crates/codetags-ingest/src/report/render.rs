@@ -145,7 +145,20 @@ impl Report {
         let mut out = String::new();
         let regression = &self.regression;
         match regression.previous {
-            None => out.push_str("edge counts: no previous generation to compare with\n"),
+            None => match &regression.incomparable {
+                None => out.push_str("edge counts: no previous generation to compare with\n"),
+                Some(earlier) => {
+                    let version = earlier
+                        .schema_version
+                        .map_or_else(|| "none".to_string(), |v| v.to_string());
+                    let _ = writeln!(
+                        out,
+                        "edge counts: nothing to compare with; generation {} has schema \
+                         version {version}, which this build does not read",
+                        earlier.generation
+                    );
+                }
+            },
             Some(previous) if regression.drops.is_empty() => {
                 let _ = writeln!(
                     out,

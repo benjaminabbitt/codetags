@@ -55,10 +55,11 @@
 //!   part of a module's architecture. Their `symbol` rows have no file and
 //!   `external = true`. A symbol of the project's own package that has no
 //!   definition (rust-analyzer's derived impls, V65) is not external.
-//! - **Targets.** Each call site has exactly one `call_target`, its declared
-//!   target, with `method = declared`. Implementations of trait methods are
-//!   not guessed: rust-analyzer writes no `is_implementation` relationships
-//!   (V64), and expanding them waits on a decision.
+//! - **Targets.** [`ingest`] writes each call site exactly one
+//!   `call_target`, its declared target, with `method = declared`.
+//!   rust-analyzer writes no `is_implementation` relationships (V64), so
+//!   implementations of trait methods are added afterwards, by the separate
+//!   pass in [`implementations`] (D31), as `lsp-impl` targets.
 //! - **Dispatch** comes from what SCIP gives, and never claims more (see
 //!   [`Dispatch`]): `static` for a free function, an impl block's method or a
 //!   macro; `virtual` for a trait's method; never `dynamic`; and `unknown`
@@ -72,6 +73,7 @@
 //! task P1.3b.
 
 mod analyze;
+pub mod implementations;
 mod rules;
 mod source;
 mod write;

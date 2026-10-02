@@ -36,7 +36,18 @@ fn change_edge_count(world: &mut CodetagsWorld, path: String, generation: u64, e
 #[given(expr = "the file {string} in the scenario's directory holds:")]
 fn file_holds(world: &mut CodetagsWorld, path: String, step: &Step) {
     let text = step.docstring.as_ref().expect("the step has a docstring");
+    // The parsed docstring starts with the newline after its opening
+    // delimiter (V161); without it, line numbers match the docstring's.
+    // A Windows checkout may have CRLF line ends.
+    let text = text
+        .strip_prefix("\r\n")
+        .or_else(|| text.strip_prefix('\n'))
+        .unwrap_or(text);
     let file = world.scratch().join(&path);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create {}: {error}", parent.display()));
+    }
     std::fs::write(&file, text).unwrap_or_else(|error| panic!("write {}: {error}", file.display()));
 }
 

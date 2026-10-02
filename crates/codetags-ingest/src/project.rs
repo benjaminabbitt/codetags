@@ -12,16 +12,31 @@
 //! Providers are detected from the root: `Cargo.toml` means Rust. Each
 //! provider writes its index and stderr under `.codetags/index/providers/`,
 //! which is ignored and never mistaken for a generation.
+//!
+//! After the Rust provider's SCIP ingest, the implementation pass expands
+//! calls of the project's trait methods to their implementations through
+//! rust-analyzer's `textDocument/implementation` (PLAN.md D31;
+//! [`crate::ingest::implementations`]). It is its own run in the
+//! generation, and it fails the run as loudly as a provider does.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use codetags_model::{GcReport, GenerationStore, StoreError};
+use codetags_model::{GcReport, GenerationStore, GenerationWriter, StoreError};
 
+use crate::ingest::implementations::{self, Expansion};
 use crate::ingest::{self, IngestError, IngestReport, RunInfo};
 use crate::provider::ProviderError;
-use crate::provider::rust::{self, RustAnalyzer};
+use crate::provider::rust::implementations::ImplError;
+use crate::provider::rust::{self, IMPL_PROVIDER, RustAnalyzer};
+use crate::provider::scip::ScipIndex;
+
+/// How long the implementation pass waits for rust-analyzer to load the
+/// workspace by default. Generous: loading this repository took about 1 s
+/// with a warm target directory, 15 s with a cold one, and over a minute
+/// while cargo held the target directory's lock (V141, V160).
+pub const DEFAULT_LOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The project's data directory, relative to the root.
 pub const DATA_DIR: &str = ".codetags";
@@ -71,10 +86,22 @@ pub fn detect(root: &Path) -> Vec<Provider> {
 }
 
 /// How to run the providers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct IndexOptions {
     /// The Rust provider; by default the `rust-analyzer` on `PATH`.
     pub rust_analyzer: RustAnalyzer,
+    /// How long the implementation pass waits for rust-analyzer to load the
+    /// workspace; [`DEFAULT_LOAD_TIMEOUT`] by default.
+    pub rust_analyzer_load_timeout: Duration,
+}
+
+impl Default for IndexOptions {
+    fn default() -> Self {
+        Self {
+            rust_analyzer: RustAnalyzer::default(),
+            rust_analyzer_load_timeout: DEFAULT_LOAD_TIMEOUT,
+        }
+    }
 }
 
 /// One provider's part of an indexing run.
@@ -86,6 +113,9 @@ pub struct ProviderRun {
     pub version: String,
     /// What its ingest wrote and skipped.
     pub report: IngestReport,
+    /// What the implementation pass added (Rust); `None` when there was no
+    /// call of a project trait method to expand, so it did not run.
+    pub implementations: Option<Expansion>,
 }
 
 /// What [`index_project`] did.
@@ -130,6 +160,8 @@ pub enum IndexError {
         /// Why.
         source: IngestError,
     },
+    /// The implementation pass (D31) failed to get its answers.
+    Implementations(ImplError),
     /// The generation store failed.
     Store(StoreError),
 }
@@ -147,6 +179,7 @@ impl fmt::Display for IndexError {
             Self::Ingest { provider, source } => {
                 write!(f, "ingesting {}: {source}", provider.name())
             }
+            Self::Implementations(source) => write!(f, "{IMPL_PROVIDER}: {source}"),
             Self::Store(error) => write!(f, "{error}"),
         }
     }
@@ -159,6 +192,7 @@ impl std::error::Error for IndexError {
             Self::DataDir { source, .. } => Some(source),
             Self::Provider { source, .. } => Some(source),
             Self::Ingest { source, .. } => Some(source),
+            Self::Implementations(source) => Some(source),
             Self::Store(error) => Some(error),
         }
     }
@@ -268,11 +302,76 @@ fn run_provider(
         },
     )
     .map_err(|source| IndexError::Ingest { provider, source })?;
+    let implementations = match provider {
+        Provider::Rust => expand_implementations(
+            root,
+            &out,
+            options,
+            writer,
+            &scip.index,
+            report.run_id,
+            &version,
+        )?,
+    };
     Ok(ProviderRun {
         provider,
         version,
         report,
+        implementations,
     })
+}
+
+/// The implementation pass over the Rust SCIP run `scip_run` (D31): asks
+/// rust-analyzer about every called trait method of the project, and writes
+/// what it answers. `None` when nothing is called, so nothing is asked.
+fn expand_implementations(
+    root: &Path,
+    out: &Path,
+    options: &IndexOptions,
+    writer: &GenerationWriter,
+    index: &ScipIndex,
+    scip_run: i64,
+    version: &str,
+) -> Result<Option<Expansion>, IndexError> {
+    let provider = Provider::Rust;
+    let ingest_error = |source| IndexError::Ingest { provider, source };
+    let questions =
+        implementations::questions(writer.connection(), index, scip_run).map_err(ingest_error)?;
+    if questions.is_empty() {
+        return Ok(None);
+    }
+    // The server speaks URIs, so it gets an absolute root; the canonical
+    // one, so its answers' paths compare with it.
+    let absolute = std::fs::canonicalize(root)
+        .or_else(|_| std::path::absolute(root))
+        .map_err(|source| IndexError::DataDir {
+            path: root.to_path_buf(),
+            source,
+        })?;
+    let started_at = SystemTime::now();
+    let answers = options
+        .rust_analyzer
+        .implementations(
+            &absolute,
+            &questions.positions,
+            options.rust_analyzer_load_timeout,
+            &out.join("lsp-stderr.log"),
+        )
+        .map_err(IndexError::Implementations)?;
+    let run = RunInfo {
+        provider: IMPL_PROVIDER.to_string(),
+        provider_version: version.to_string(),
+        args: vec![
+            "lsp".to_string(),
+            "textDocument/implementation".to_string(),
+            absolute.display().to_string(),
+        ],
+        started_at,
+        finished_at: SystemTime::now(),
+    };
+    implementations::write(writer.connection(), &questions, &answers, &run)
+        .map(Some)
+        .map_err(ingest_error)
 }
 
 #[cfg(test)]
@@ -314,6 +413,7 @@ mod tests {
         std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
         let options = IndexOptions {
             rust_analyzer: RustAnalyzer::with_program(dir.path().join("no-such-rust-analyzer")),
+            ..IndexOptions::default()
         };
         let error = index_project(dir.path(), &options).unwrap_err();
         assert!(

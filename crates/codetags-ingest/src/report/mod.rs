@@ -185,12 +185,25 @@ impl Serialize for Total {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Regression {
     /// The generation compared with; `None` when there is no earlier
-    /// complete generation, and nothing was checked.
+    /// complete generation this build can read, and nothing was checked.
     pub previous: Option<u64>,
+    /// The earlier complete generation, when it has a schema version this
+    /// build does not read (written before a schema change), so it was not
+    /// compared with.
+    pub incomparable: Option<Incomparable>,
     /// [`DROP_THRESHOLD_PERCENT`].
     pub threshold_percent: u32,
     /// The files that dropped. Any fails the report.
     pub drops: Vec<EdgeDrop>,
+}
+
+/// An earlier generation the previous-generation check could not read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Incomparable {
+    /// Its number.
+    pub generation: u64,
+    /// The schema version it records; `None` if none.
+    pub schema_version: Option<i64>,
 }
 
 /// The baseline check.
@@ -347,16 +360,30 @@ pub fn report(root: &Path, index: &Path, options: &ReportOptions) -> Result<Repo
     let (modules, languages, total) = query::resolution(&db)?;
     let edge_counts = query::edge_counts(&db)?;
 
-    let previous = store
+    let mut previous = store
         .complete_generations()?
         .into_iter()
         .rev()
         .find(|&n| n < number);
+    let mut incomparable = None;
     let drops = match previous {
-        Some(previous) => {
-            let before = query::edge_counts(&store.open(previous)?.connect()?)?;
-            regressions(&before, &edge_counts, |path| root.join(path).exists())
-        }
+        Some(earlier) => match store.open(earlier) {
+            Ok(generation) => {
+                let before = query::edge_counts(&generation.connect()?)?;
+                regressions(&before, &edge_counts, |path| root.join(path).exists())
+            }
+            // Generations are rebuilt, never migrated: one this build
+            // cannot read is not compared with.
+            Err(StoreError::UnknownSchemaVersion { found, .. }) => {
+                previous = None;
+                incomparable = Some(Incomparable {
+                    generation: earlier,
+                    schema_version: found,
+                });
+                Vec::new()
+            }
+            Err(error) => return Err(error.into()),
+        },
         None => Vec::new(),
     };
 
@@ -375,6 +402,7 @@ pub fn report(root: &Path, index: &Path, options: &ReportOptions) -> Result<Repo
         total: Total(total),
         regression: Regression {
             previous,
+            incomparable,
             threshold_percent: DROP_THRESHOLD_PERCENT,
             drops,
         },

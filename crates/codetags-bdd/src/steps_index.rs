@@ -620,6 +620,74 @@ fn edge_counts(world: &mut CodetagsWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
+#[then(expr = "the call targets of the call to {string} in {string} on line {int} are:")]
+fn call_targets_are(
+    world: &mut CodetagsWorld,
+    declared: String,
+    path: String,
+    line: i64,
+    step: &Step,
+) {
+    let db = newest(world);
+    let sites = rows(
+        &db,
+        "SELECT count(*)::TEXT FROM call_site s JOIN symbol d ON d.id = s.declared_target
+         WHERE s.file = ? AND s.line = ? AND d.name = ?",
+        &[&path, &line, &declared],
+    );
+    if sites[0][0] == "0" {
+        let all = rows(
+            &db,
+            "SELECT s.line::TEXT, d.name FROM call_site s JOIN symbol d ON d.id = s.declared_target
+             WHERE s.file = ? ORDER BY s.line",
+            &[&path],
+        );
+        panic!("no call to {declared} in {path} on line {line}; its call sites: {all:?}");
+    }
+    let mut actual = rows(
+        &db,
+        "SELECT t.name, ct.method,
+                (count(*) OVER (PARTITION BY ct.site_id, ct.method))::TEXT
+         FROM call_site s
+         JOIN symbol d ON d.id = s.declared_target
+         JOIN call_target ct ON ct.site_id = s.site_id
+         JOIN symbol t ON t.id = ct.target
+         WHERE s.file = ? AND s.line = ? AND d.name = ?",
+        &[&path, &line, &declared],
+    );
+    actual.sort();
+    let mut expected: Vec<Vec<String>> = table_rows(step)
+        .into_iter()
+        .map(|row| {
+            ["target", "method", "candidates"]
+                .iter()
+                .map(|column| row[*column].clone())
+                .collect()
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(
+        actual, expected,
+        "call targets of the call to {declared} in {path} on line {line}"
+    );
+}
+
+#[then(expr = "the edge counts of the run of {string} are:")]
+fn edge_counts_of_run(world: &mut CodetagsWorld, provider: String, step: &Step) {
+    let db = newest(world);
+    let actual = rows(
+        &db,
+        "SELECT f.path, f.edge_count::TEXT FROM run_file f JOIN run r USING (run_id)
+         WHERE r.provider = ? AND r.status = 'succeeded' ORDER BY f.path",
+        &[&provider],
+    );
+    let expected: Vec<Vec<String>> = table_rows(step)
+        .into_iter()
+        .map(|row| vec![row["file"].clone(), row["edges"].clone()])
+        .collect();
+    assert_eq!(actual, expected, "edge counts of the run of {provider}");
+}
+
 #[then(expr = "the ingest report counts:")]
 fn report_counts(world: &mut CodetagsWorld, step: &Step) {
     let report = world

@@ -22,7 +22,7 @@ fn int(value: u32) -> i64 {
 
 /// The id the next row of `column` in `table` gets: one more than the
 /// highest, so several runs can share a generation.
-fn next_id(db: &Connection, table: &str, column: &str) -> Result<i64, IngestError> {
+pub(crate) fn next_id(db: &Connection, table: &str, column: &str) -> Result<i64, IngestError> {
     Ok(db.query_row(
         &format!("SELECT coalesce(max({column}), 0) + 1 FROM {table}"),
         [],
@@ -150,7 +150,7 @@ fn write_rows(
 }
 
 /// Writes the `run` row, its source tree still to be filled in.
-fn write_run(db: &Connection, run_id: i64, run: &RunInfo) -> Result<(), IngestError> {
+pub(crate) fn write_run(db: &Connection, run_id: i64, run: &RunInfo) -> Result<(), IngestError> {
     let placeholders = vec!["?"; run.args.len()].join(", ");
     let sql = format!(
         "INSERT INTO run (run_id, provider, provider_version, args, started_at, finished_at,

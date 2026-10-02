@@ -155,6 +155,33 @@ fn the_index_summary_is_one_line_per_language_then_the_regression() {
 }
 
 #[test]
+fn a_previous_generation_of_another_schema_is_not_compared_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index");
+    generation(
+        &index,
+        "INSERT INTO run_file VALUES (1, 'a.rs', 10);
+         UPDATE schema_info SET schema_version = 2;",
+    );
+    generation(&index, "INSERT INTO run_file VALUES (1, 'a.rs', 0);");
+    let report = report(dir.path(), &index, &ReportOptions::default()).unwrap();
+    assert_eq!(report.regression.previous, None);
+    assert_eq!(
+        report.regression.incomparable,
+        Some(Incomparable {
+            generation: 1,
+            schema_version: Some(2)
+        })
+    );
+    assert!(report.passed());
+    assert_eq!(
+        report.regression_text(),
+        "edge counts: nothing to compare with; generation 1 has schema version 2, \
+         which this build does not read\n"
+    );
+}
+
+#[test]
 fn a_drop_since_the_previous_generation_fails() {
     let dir = tempfile::tempdir().unwrap();
     let index = dir.path().join("index");

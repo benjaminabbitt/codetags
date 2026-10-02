@@ -29,7 +29,9 @@ use crate::StoreError;
 /// - 2: P1.3, SCIP ingest: canonical names, module ancestors, the `external`
 ///   flag and package on `symbol`; the run, column, reference kind and
 ///   constraints on `call_site`.
-pub const SCHEMA_VERSION: u32 = 2;
+/// - 3: D31, the `call_target` method `lsp-impl`: an implementation of a
+///   trait method that rust-analyzer's `textDocument/implementation` found.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The DDL of one generation, without the `schema_info` row.
 pub const SCHEMA_SQL: &str = "
@@ -102,11 +104,16 @@ CREATE TABLE call_site (
   source          TEXT NOT NULL   -- scip@<indexer>-<version> | lsp@<ver> | treesitter | callgraph
 );
 
+-- A call site's targets: its declared target, and the targets an analysis
+-- added, each labelled with the method that found it (brief §4.4). How many
+-- targets of one method a site has is its candidate count (`prov:candidates`).
+-- lsp-impl: an implementation of the declared trait method, from
+-- rust-analyzer's textDocument/implementation (D31).
 CREATE TABLE call_target (
   site_id BIGINT NOT NULL REFERENCES call_site,
   target  TEXT NOT NULL,
   method  TEXT NOT NULL CHECK (method IN
-            ('declared', 'cha', 'rta', 'vta', 'jelly', 'di-binding', 'name-match'))
+            ('declared', 'cha', 'rta', 'vta', 'jelly', 'di-binding', 'name-match', 'lsp-impl'))
 );
 ";
 
@@ -221,9 +228,10 @@ mod tests {
                  VALUES ('s f().', 'f', 'function', ['m'], false);
              INSERT INTO call_site VALUES
                  (1, 1, 's f().', 'a.rs', 1, 1, 1, 'call', NULL, 's f().', 'static', 'scip@x');
-             INSERT INTO call_target VALUES (1, 's f().', 'declared');",
+             INSERT INTO call_target VALUES (1, 's f().', 'declared');
+             INSERT INTO call_target VALUES (1, 's g().', 'lsp-impl');",
         )
-        .expect("a valid call site");
+        .expect("a valid call site, with an implementation found over LSP");
         for (column, bad) in [("ref_kind", "jump"), ("dispatch", "maybe")] {
             let (ref_kind, dispatch) = if column == "ref_kind" {
                 (bad, "static")

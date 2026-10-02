@@ -376,6 +376,11 @@ Then every call site has exactly one call target, its declared target, with the 
 Then every call site's source matches {string}               # Rust `regex` syntax
 Then the generation holds one succeeded run of {string}      # the run's provider
 Then the run's edge counts are:                              # table: file | edges; all of run_file
+Then the edge counts of the run of {string} are:             # table: file | edges; the run_file rows of that provider's succeeded run
+Then the call targets of the call to {string} in {string} on line {int} are:
+      # table: target | method | candidates; every call_target of the call sites on that line whose
+      # declared target has that canonical name (there must be one), the target by canonical name;
+      # candidates is how many targets of that method the call site has (D31)
 Then the ingest report counts:
       # table: what | count; what is one of: files, symbols, call sites,
       # local occurrences, operator references, non-callable references,
@@ -404,7 +409,10 @@ steps write. A generation's edge counts are its `run_file` rows.
 Given the edge count of {string} in generation {int} is changed to {int}
       # rewrites that file's `run_file` rows in that complete generation, as a
       # provider that silently lost (or gained) edges would have written them
-Given the file {string} in the scenario's directory holds:   # docstring, written as is
+Given the file {string} in the scenario's directory holds:
+      # docstring, written as is, except the newline the parser puts first
+      # (V161), so its line 1 is the file's line 1; replaces any file there;
+      # missing parent directories are created
 Then the JSON resolution report counts:
       # parses the last process's stdout (`report --json`); table: scope | language |
       # package | module | call sites | resolved | unresolved, where scope is module,

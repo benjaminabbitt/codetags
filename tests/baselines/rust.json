@@ -1,4 +1,11 @@
 {
+  "rust-analyzer lsp-impl": {
+    "src/charge.rs": 0,
+    "src/ledger.rs": 0,
+    "src/lib.rs": 0,
+    "src/macros.rs": 0,
+    "src/pipeline.rs": 3
+  },
   "rust-analyzer scip": {
     "src/charge.rs": 0,
     "src/ledger.rs": 5,
