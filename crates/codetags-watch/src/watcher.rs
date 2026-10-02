@@ -637,6 +637,8 @@ fn helper_notice(
 ) -> Result<(), WatchError> {
     let now = Instant::now();
     match notice {
+        // The writer's PID goes no further than this: batches carry none in
+        // v1 (PLAN.md D40, docs/privhelper-threat-model.md C8).
         Ok(Notice::Event(event)) => {
             engine.hint(now, &event.path, event.kind == HelperKind::Modified)
         }

@@ -45,13 +45,16 @@
 //!   it is canonicalized there, as the client. Every event is then sent only
 //!   if the checker can list the directory holding its path (for the root
 //!   itself, the root). So the kernel applies the permission bits, ACLs and
-//!   LSM rules exactly as for the client, and a root helper never shows one
-//!   user another user's file names, even inside a root the client owns.
+//!   LSM rules exactly as for the client. The aim is that a root helper never
+//!   shows one user another user's file names, even inside a root the client
+//!   owns; `docs/privhelper-threat-model.md` records where that still falls
+//!   short.
 //! - **What a client learns.** Paths it could list anyway, the kind of
 //!   change, and the writer's PID. PIDs are visible in `/proc` to every user
 //!   unless `/proc` is mounted with `hidepid`; on such a system, note that
 //!   the helper reveals the PID of a process that wrote into a directory
-//!   the client can list.
+//!   the client can list. The watcher drops PIDs: its batches carry none in
+//!   v1 (PLAN.md D40).
 //! - **What it never does.** It never executes project code, and never
 //!   writes to a project: it opens roots read-only to mark them and decodes
 //!   handles with `O_PATH`. It never follows a client's path as root: the
@@ -67,28 +70,11 @@
 //!
 //! # Running it
 //!
-//! Install the binary root-owned (e.g. `/usr/local/libexec/`), so no user can
-//! replace it, and run it as root, e.g. as a systemd service:
-//!
-//! ```ini
-//! [Unit]
-//! Description=codetags privileged watcher helper (optional)
-//!
-//! [Service]
-//! ExecStart=/usr/local/libexec/codetags-privhelper
-//! Restart=on-failure
-//! NoNewPrivileges=yes
-//! ProtectSystem=strict
-//! RuntimeDirectory=codetags
-//! RuntimeDirectoryMode=0755
-//!
-//! [Install]
-//! WantedBy=multi-user.target
-//! ```
-//!
-//! `RuntimeDirectory=codetags` creates `/run/codetags/`. The helper logs
-//! to stderr, so to the journal. Stopping it is always safe: watchers switch
-//! to notify and rescan.
+//! Nobody is told to install this helper until its threat model,
+//! `docs/privhelper-threat-model.md`, is signed off (PLAN.md D40). That
+//! document lists the open findings and the operational requirements. The
+//! `privileged-linux` CI job runs it under `sudo -n` to test it. Stopping it
+//! is always safe: watchers switch to notify and rescan.
 //!
 //! # Windows: the USN change journal (TODO, P4.4 part 2)
 //!

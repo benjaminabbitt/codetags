@@ -87,6 +87,9 @@ pub struct HelperEvent {
     /// What happened.
     pub kind: EventKind,
     /// The process that caused it, when the kernel reported one.
+    ///
+    /// It stops at the helper's client: the watcher drops it, and a
+    /// [`crate::Batch`] carries no PIDs in v1 (PLAN.md D40).
     pub pid: Option<u32>,
 }
 
