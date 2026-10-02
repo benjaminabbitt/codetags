@@ -50,7 +50,10 @@ getrandom = "0.3"
 # upgrade). protobuf is the version scip itself pins (V63).
 scip = "=0.10.0"
 protobuf = "=3.7.2"
-notify = "8.2"
+# A deliberate pre-release exception (D35): on Windows, 8.2 drops a buffer
+# overflow silently and unwatches on ERROR_NOTIFY_ENUM_DIR, where rc.5 sends
+# Flag::Rescan for both (V56, V170). Move to 9.0 when it is stable.
+notify = "=9.0.0-rc.5"
 # GPL-3.0, allowed only beneath codetags-mount-winfsp (D9, deny.toml). The
 # default features (`full`: notify, delayload, async-io) are kept; no
 # `system`, so building needs no WinFsp install (V28).

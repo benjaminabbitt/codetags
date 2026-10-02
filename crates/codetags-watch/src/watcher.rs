@@ -1005,6 +1005,96 @@ mod tests {
         ));
     }
 
+    /// A real ReadDirectoryChangesW overflow (D35, V56): notify 9.0.0-rc.5
+    /// reports it as `Flag::Rescan`, the engine rescans, and the watch keeps
+    /// reporting afterwards. notify 8.2 dropped it silently, or unwatched
+    /// the directory.
+    ///
+    /// The overflow is forced, not hoped for. notify calls the handler from
+    /// the completion routine, on its one watcher thread, so stalling the
+    /// handler on the first event stalls the next completion too. Windows
+    /// keeps buffering changes for the directory handle meanwhile, in a
+    /// buffer the size of notify's read buffer (16 KiB), and discards them
+    /// all once that fills: the next read completes with no data or with
+    /// `ERROR_NOTIFY_ENUM_DIR`. A burst of 2,000 creates with 100-character
+    /// names writes about 420 KiB of records, so it fills many times over.
+    #[cfg(windows)]
+    #[test]
+    fn a_real_buffer_overflow_rescans_and_the_watch_keeps_reporting() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        const FILES: usize = 2_000;
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let stall = Arc::new(AtomicBool::new(true));
+        let first = Arc::clone(&stall);
+        let mut notifier = notify::recommended_watcher(move |event| {
+            if first.swap(false, Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            let _ = tx.send(event);
+        })
+        .unwrap();
+        notifier.watch(&root, RecursiveMode::Recursive).unwrap();
+        let mut engine = Engine::new(
+            root.clone(),
+            Vec::new(),
+            Box::new(Recursive(notifier)),
+            WatchConfig::default(),
+            Instant::now(),
+        )
+        .unwrap();
+
+        let long = "x".repeat(100);
+        for i in 0..FILES {
+            fs::write(root.join(format!("{i:05}-{long}.rs")), "").unwrap();
+        }
+
+        // Feeds events to the engine until a flushed batch satisfies `done`.
+        let pump = |engine: &mut Engine, what: &str, done: &dyn Fn(&Batch) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut seen = Vec::new();
+            loop {
+                assert!(
+                    Instant::now() < deadline,
+                    "no batch with {what} within 60 s; batches seen (rescan, changes): {seen:?}"
+                );
+                if let Ok(event) = rx.recv_timeout(Duration::from_millis(100)) {
+                    engine.handle(Instant::now(), event).unwrap();
+                }
+                let far = Instant::now() + Duration::from_secs(3600);
+                while let Some(batch) = engine.poll(far) {
+                    if done(&batch) {
+                        return batch;
+                    }
+                    seen.push((batch.rescan.clone(), batch.changes.len()));
+                }
+            }
+        };
+
+        let rescanned = pump(&mut engine, "a rescan for the overflow", &|batch| {
+            batch.rescan == Some(RescanCause::Overflow)
+        });
+        assert!(!stall.load(Ordering::SeqCst), "the handler never stalled");
+        // The rescan reports what the lost events did not, against the last
+        // batch: every file the burst made is accounted for, by events
+        // flushed before it or by the rescan itself.
+        assert!(rescanned.changes.len() <= FILES);
+
+        // The watch survived: a later write is reported by an event.
+        fs::write(root.join("after.rs"), "x").unwrap();
+        let after = pump(&mut engine, "after.rs", &|batch| {
+            batch
+                .changes
+                .iter()
+                .any(|change| change.path == Path::new("after.rs"))
+        });
+        assert_eq!(
+            after.rescan, None,
+            "after.rs came from a rescan, not an event"
+        );
+    }
+
     /// A fake helper on a Unix socket: welcomes one client, accepts its
     /// subscription, then sends what arrives on the returned channel, and
     /// hangs up when that channel closes.
